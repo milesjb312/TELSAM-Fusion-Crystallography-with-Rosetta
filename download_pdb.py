@@ -15,15 +15,15 @@ if len(sys.argv)==2:
 	pyrosetta.init()
 	url = f"https://files.rcsb.org/download/{sys.argv[1]}.pdb"
 	pdb_text = requests.get(url).text
-	with open("temp_prot.pdb","w") as file:
+	with open("./TELSetta/temp_prot.pdb","w") as file:
 		file.write(pdb_text)
-	cleanATOM("temp_prot.pdb")
-	temp_pose = pose_from_pdb('temp_prot.clean.pdb')
+	cleanATOM("./TELSetta/temp_prot.pdb")
+	temp_pose = pose_from_pdb('./TELSetta/temp_prot.clean.pdb')
 	final_pose = Pose()
 	append_subpose_to_pose(final_pose,temp_pose,temp_pose.chain_begin(1),temp_pose.chain_end(1))
-	final_pose.dump_pdb(f'{sys.argv[1]}.pdb')
-	#os.remove("temp_prot.pdb")
-	os.remove("temp_prot.clean.pdb")
+	final_pose.dump_pdb(f'./TELSetta/{sys.argv[1]}.pdb')
+	#os.remove("./TELSetta/temp_prot.pdb")
+	os.remove("./TELSetta/temp_prot.clean.pdb")
 
 if len(sys.argv) == 3:
 	pyrosetta.init()
@@ -59,7 +59,7 @@ if len(sys.argv) == 3:
 		atom_map.set(E_atom,S_atom)
 
 	superimpose_pose(E_pose,S_pose,atom_map)
-	S_pose.dump_pdb(f'{sys.argv[1]}.pdb')
+	S_pose.dump_pdb(f'./TELSetta/{sys.argv[1]}.pdb')
 	os.remove("ETEL.pdb")
 	os.remove("ETEL.clean.pdb")
 	os.remove("STEL.pdb")

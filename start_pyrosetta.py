@@ -96,7 +96,7 @@ if client_and_guest_loaded:
 		delete_region(client_protein,client_protein.chain_begin(1),client_protein.chain_begin(1))
 		append_pose_to_pose(TELSAM,client_protein,new_chain=False)
 		TELSAM.conformation().declare_chemical_bond(81-start_residue_to_superimpose+1,"C",82-start_residue_to_superimpose+1,"N")		
-		symm_mover = SetupForSymmetryMover("./TELSetta/9DOC_2.symm")
+		symm_mover = SetupForSymmetryMover("./TELSetta/TELSAM_9DOC.symm")
 		symm_mover.apply(TELSAM)
 		print(f'Symmetric pose: {is_symmetric(TELSAM)}')
 		sf = get_score_function()
