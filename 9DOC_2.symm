@@ -1,0 +1,93 @@
+symmetry_name 9DOC_2_P_65
+E = 2*VRT_0_0_0_0_base + 2*(VRT_0_0_0_0_base:VRT_1_0_0_n1_base) + 2*(VRT_0_0_0_0_base:VRT_2_1_0_0_base) + 2*(VRT_0_0_0_0_base:VRT_2_0_0_n1_base) + 2*(VRT_0_0_0_0_base:VRT_1_0_n1_n1_base) + 2*(VRT_0_0_0_0_base:VRT_2_0_n1_n1_base) + 2*(VRT_0_0_0_0_base:VRT_3_1_0_0_base) + 2*(VRT_0_0_0_0_base:VRT_2_1_0_n1_base) + 2*(VRT_0_0_0_0_base:VRT_3_1_1_0_base)
+anchor_residue 1
+virtual_coordinates_start
+xyz VRT_0_0_0_0 1.000000,0.000000,0.000000 0.000000,1.000000,0.000000 34.998761,7.787108,-16.690613
+xyz VRT_0_0_0_0_base 1.000000,0.000000,0.000000 0.000000,1.000000,0.000000 33.998761,6.787108,-17.690613
+xyz VRT_1_0_0_n1 0.500000,0.866025,0.000000 -0.866025,0.500000,0.000000 10.755547,34.203370,-24.897113
+xyz VRT_1_0_0_n1_base 0.500000,0.866025,0.000000 -0.866025,0.500000,0.000000 11.121572,32.837345,-25.897113
+xyz VRT_5_0_0_0 0.500000,-0.866025,0.000000 0.866025,0.500000,0.000000 24.243214,-26.416262,-8.484113
+xyz VRT_5_0_0_0_base 0.500000,-0.866025,0.000000 0.866025,0.500000,0.000000 22.877189,-26.050236,-9.484113
+xyz VRT_2_1_0_0 -0.500000,0.866025,0.000000 -0.866025,-0.500000,0.000000 77.184786,26.416262,16.135387
+xyz VRT_2_1_0_0_base -0.500000,0.866025,0.000000 -0.866025,-0.500000,0.000000 78.550811,26.050236,15.135387
+xyz VRT_4_1_1_n1 -0.500000,-0.866025,0.000000 0.866025,-0.500000,0.000000 39.958453,53.635855,-49.516613
+xyz VRT_4_1_1_n1_base -0.500000,-0.866025,0.000000 0.866025,-0.500000,0.000000 39.592428,55.001880,-50.516613
+xyz VRT_2_0_0_n1 -0.500000,0.866025,0.000000 -0.866025,-0.500000,0.000000 -24.243214,26.416262,-33.103613
+xyz VRT_2_0_0_n1_base -0.500000,0.866025,0.000000 -0.866025,-0.500000,0.000000 -22.877189,26.050236,-34.103613
+xyz VRT_4_0_0_0 -0.500000,-0.866025,0.000000 0.866025,-0.500000,0.000000 -10.755547,-34.203370,-0.277613
+xyz VRT_4_0_0_0_base -0.500000,-0.866025,0.000000 0.866025,-0.500000,0.000000 -11.121572,-32.837345,-1.277613
+xyz VRT_1_0_n1_n1 0.500000,0.866025,0.000000 -0.866025,0.500000,0.000000 61.469547,-53.635855,-24.897113
+xyz VRT_1_0_n1_n1_base 0.500000,0.866025,0.000000 -0.866025,0.500000,0.000000 61.835572,-55.001880,-25.897113
+xyz VRT_5_1_1_0 0.500000,-0.866025,0.000000 0.866025,0.500000,0.000000 74.957214,61.422963,-8.484113
+xyz VRT_5_1_1_0_base 0.500000,-0.866025,0.000000 0.866025,0.500000,0.000000 73.591189,61.788988,-9.484113
+xyz VRT_2_0_n1_n1 -0.500000,0.866025,0.000000 -0.866025,-0.500000,0.000000 26.470786,-61.422963,-33.103613
+xyz VRT_2_0_n1_n1_base -0.500000,0.866025,0.000000 -0.866025,-0.500000,0.000000 27.836811,-61.788988,-34.103613
+xyz VRT_4_1_0_0 -0.500000,-0.866025,0.000000 0.866025,-0.500000,0.000000 90.672453,-34.203370,-0.277613
+xyz VRT_4_1_0_0_base -0.500000,-0.866025,0.000000 0.866025,-0.500000,0.000000 90.306428,-32.837345,-1.277613
+xyz VRT_3_1_0_0 -1.000000,0.000000,0.000000 0.000000,-1.000000,0.000000 66.429239,-7.787108,7.928887
+xyz VRT_3_1_0_0_base -1.000000,0.000000,0.000000 0.000000,-1.000000,0.000000 67.429239,-6.787108,6.928887
+xyz VRT_3_1_0_n1 -1.000000,0.000000,0.000000 0.000000,-1.000000,0.000000 66.429239,-7.787108,-41.310113
+xyz VRT_3_1_0_n1_base -1.000000,0.000000,0.000000 0.000000,-1.000000,0.000000 67.429239,-6.787108,-42.310113
+xyz VRT_2_1_0_n1 -0.500000,0.866025,0.000000 -0.866025,-0.500000,0.000000 77.184786,26.416262,-33.103613
+xyz VRT_2_1_0_n1_base -0.500000,0.866025,0.000000 -0.866025,-0.500000,0.000000 78.550811,26.050236,-34.103613
+xyz VRT_4_1_1_0 -0.500000,-0.866025,0.000000 0.866025,-0.500000,0.000000 39.958453,53.635855,-0.277613
+xyz VRT_4_1_1_0_base -0.500000,-0.866025,0.000000 0.866025,-0.500000,0.000000 39.592428,55.001880,-1.277613
+xyz VRT_3_1_1_0 -1.000000,0.000000,0.000000 0.000000,-1.000000,0.000000 15.715239,80.052116,7.928887
+xyz VRT_3_1_1_0_base -1.000000,0.000000,0.000000 0.000000,-1.000000,0.000000 16.715239,81.052116,6.928887
+xyz VRT_3_1_1_n1 -1.000000,0.000000,0.000000 0.000000,-1.000000,0.000000 15.715239,80.052116,-41.310113
+xyz VRT_3_1_1_n1_base -1.000000,0.000000,0.000000 0.000000,-1.000000,0.000000 16.715239,81.052116,-42.310113
+virtual_coordinates_stop
+connect_virtual JUMP_0_0_0_0_to_subunit VRT_0_0_0_0_base SUBUNIT
+connect_virtual JUMP_1_0_0_n1_to_subunit VRT_1_0_0_n1_base SUBUNIT
+connect_virtual JUMP_5_0_0_0_to_subunit VRT_5_0_0_0_base SUBUNIT
+connect_virtual JUMP_2_1_0_0_to_subunit VRT_2_1_0_0_base SUBUNIT
+connect_virtual JUMP_4_1_1_n1_to_subunit VRT_4_1_1_n1_base SUBUNIT
+connect_virtual JUMP_2_0_0_n1_to_subunit VRT_2_0_0_n1_base SUBUNIT
+connect_virtual JUMP_4_0_0_0_to_subunit VRT_4_0_0_0_base SUBUNIT
+connect_virtual JUMP_1_0_n1_n1_to_subunit VRT_1_0_n1_n1_base SUBUNIT
+connect_virtual JUMP_5_1_1_0_to_subunit VRT_5_1_1_0_base SUBUNIT
+connect_virtual JUMP_2_0_n1_n1_to_subunit VRT_2_0_n1_n1_base SUBUNIT
+connect_virtual JUMP_4_1_0_0_to_subunit VRT_4_1_0_0_base SUBUNIT
+connect_virtual JUMP_3_1_0_0_to_subunit VRT_3_1_0_0_base SUBUNIT
+connect_virtual JUMP_3_1_0_n1_to_subunit VRT_3_1_0_n1_base SUBUNIT
+connect_virtual JUMP_2_1_0_n1_to_subunit VRT_2_1_0_n1_base SUBUNIT
+connect_virtual JUMP_4_1_1_0_to_subunit VRT_4_1_1_0_base SUBUNIT
+connect_virtual JUMP_3_1_1_0_to_subunit VRT_3_1_1_0_base SUBUNIT
+connect_virtual JUMP_3_1_1_n1_to_subunit VRT_3_1_1_n1_base SUBUNIT
+connect_virtual JUMP_0_0_0_0_to_com VRT_0_0_0_0 VRT_0_0_0_0_base
+connect_virtual JUMP_1_0_0_n1_to_com VRT_1_0_0_n1 VRT_1_0_0_n1_base
+connect_virtual JUMP_5_0_0_0_to_com VRT_5_0_0_0 VRT_5_0_0_0_base
+connect_virtual JUMP_2_1_0_0_to_com VRT_2_1_0_0 VRT_2_1_0_0_base
+connect_virtual JUMP_4_1_1_n1_to_com VRT_4_1_1_n1 VRT_4_1_1_n1_base
+connect_virtual JUMP_2_0_0_n1_to_com VRT_2_0_0_n1 VRT_2_0_0_n1_base
+connect_virtual JUMP_4_0_0_0_to_com VRT_4_0_0_0 VRT_4_0_0_0_base
+connect_virtual JUMP_1_0_n1_n1_to_com VRT_1_0_n1_n1 VRT_1_0_n1_n1_base
+connect_virtual JUMP_5_1_1_0_to_com VRT_5_1_1_0 VRT_5_1_1_0_base
+connect_virtual JUMP_2_0_n1_n1_to_com VRT_2_0_n1_n1 VRT_2_0_n1_n1_base
+connect_virtual JUMP_4_1_0_0_to_com VRT_4_1_0_0 VRT_4_1_0_0_base
+connect_virtual JUMP_3_1_0_0_to_com VRT_3_1_0_0 VRT_3_1_0_0_base
+connect_virtual JUMP_3_1_0_n1_to_com VRT_3_1_0_n1 VRT_3_1_0_n1_base
+connect_virtual JUMP_2_1_0_n1_to_com VRT_2_1_0_n1 VRT_2_1_0_n1_base
+connect_virtual JUMP_4_1_1_0_to_com VRT_4_1_1_0 VRT_4_1_1_0_base
+connect_virtual JUMP_3_1_1_0_to_com VRT_3_1_1_0 VRT_3_1_1_0_base
+connect_virtual JUMP_3_1_1_n1_to_com VRT_3_1_1_n1 VRT_3_1_1_n1_base
+connect_virtual JUMP_1_0_0_n1 VRT_0_0_0_0 VRT_1_0_0_n1
+connect_virtual JUMP_5_0_0_0 VRT_0_0_0_0 VRT_5_0_0_0
+connect_virtual JUMP_2_1_0_0 VRT_0_0_0_0 VRT_2_1_0_0
+connect_virtual JUMP_4_1_1_n1 VRT_0_0_0_0 VRT_4_1_1_n1
+connect_virtual JUMP_2_0_0_n1 VRT_0_0_0_0 VRT_2_0_0_n1
+connect_virtual JUMP_4_0_0_0 VRT_0_0_0_0 VRT_4_0_0_0
+connect_virtual JUMP_1_0_n1_n1 VRT_0_0_0_0 VRT_1_0_n1_n1
+connect_virtual JUMP_5_1_1_0 VRT_0_0_0_0 VRT_5_1_1_0
+connect_virtual JUMP_2_0_n1_n1 VRT_0_0_0_0 VRT_2_0_n1_n1
+connect_virtual JUMP_4_1_0_0 VRT_0_0_0_0 VRT_4_1_0_0
+connect_virtual JUMP_3_1_0_0 VRT_0_0_0_0 VRT_3_1_0_0
+connect_virtual JUMP_3_1_0_n1 VRT_0_0_0_0 VRT_3_1_0_n1
+connect_virtual JUMP_2_1_0_n1 VRT_0_0_0_0 VRT_2_1_0_n1
+connect_virtual JUMP_4_1_1_0 VRT_0_0_0_0 VRT_4_1_1_0
+connect_virtual JUMP_3_1_1_0 VRT_0_0_0_0 VRT_3_1_1_0
+connect_virtual JUMP_3_1_1_n1 VRT_0_0_0_0 VRT_3_1_1_n1
+set_dof JUMP_0_0_0_0_to_com x y
+set_dof JUMP_0_0_0_0_to_subunit angle_x angle_y angle_z
+set_jump_group JUMPGROUP1  JUMP_0_0_0_0_to_subunit JUMP_1_0_0_n1_to_subunit JUMP_5_0_0_0_to_subunit JUMP_2_1_0_0_to_subunit JUMP_4_1_1_n1_to_subunit JUMP_2_0_0_n1_to_subunit JUMP_4_0_0_0_to_subunit JUMP_1_0_n1_n1_to_subunit JUMP_5_1_1_0_to_subunit JUMP_2_0_n1_n1_to_subunit JUMP_4_1_0_0_to_subunit JUMP_3_1_0_0_to_subunit JUMP_3_1_0_n1_to_subunit JUMP_2_1_0_n1_to_subunit JUMP_4_1_1_0_to_subunit JUMP_3_1_1_0_to_subunit JUMP_3_1_1_n1_to_subunit
+set_jump_group JUMPGROUP2  JUMP_0_0_0_0_to_com JUMP_1_0_0_n1_to_com JUMP_5_0_0_0_to_com JUMP_2_1_0_0_to_com JUMP_4_1_1_n1_to_com JUMP_2_0_0_n1_to_com JUMP_4_0_0_0_to_com JUMP_1_0_n1_n1_to_com JUMP_5_1_1_0_to_com JUMP_2_0_n1_n1_to_com JUMP_4_1_0_0_to_com JUMP_3_1_0_0_to_com JUMP_3_1_0_n1_to_com JUMP_2_1_0_n1_to_com JUMP_4_1_1_0_to_com JUMP_3_1_1_0_to_com JUMP_3_1_1_n1_to_com
