@@ -12,20 +12,22 @@ from pyrosetta.rosetta.core.pose import initialize_atomid_map
 from pyrosetta.rosetta.core.scoring import superimpose_pose
 
 if len(sys.argv)==2:
+	#If one argument is passed in, then just grab the pdb and return both its original format and the cleaned version.
 	pyrosetta.init()
 	url = f"https://files.rcsb.org/download/{sys.argv[1]}.pdb"
 	pdb_text = requests.get(url).text
-	with open("./TELSetta/temp_prot.pdb","w") as file:
+	with open(f"./TELSetta/{sys.argv[1]}.pdb","w") as file:
 		file.write(pdb_text)
-	cleanATOM("./TELSetta/temp_prot.pdb")
-	temp_pose = pose_from_pdb('./TELSetta/temp_prot.clean.pdb')
+	cleanATOM(f"./TELSetta/{sys.argv[1]}.pdb")
+	temp_pose = pose_from_pdb(f'./TELSetta/{sys.argv[1]}.clean.pdb')
 	final_pose = Pose()
 	append_subpose_to_pose(final_pose,temp_pose,temp_pose.chain_begin(1),temp_pose.chain_end(1))
-	final_pose.dump_pdb(f'./TELSetta/{sys.argv[1]}.pdb')
-	#os.remove("./TELSetta/temp_prot.pdb")
-	os.remove("./TELSetta/temp_prot.clean.pdb")
-
+	final_pose.dump_pdb(f'./TELSetta/{sys.argv[1]}.clean.pdb')
+	#os.remove(f"./TELSetta/{sys.argv[1]}.pdb")
+	
 if len(sys.argv) == 3:
+	#If two arguments are passed in, then align the first protein (engineered TELSAM) to the second protein (TELSAM with the proper space group),
+	#then export the pdb of the first protein along with the cryst1 line of the second protein.
 	pyrosetta.init()
 	#First, import the engineered TELSAM monomer.
 	url = f"https://files.rcsb.org/download/{sys.argv[1]}.pdb"
@@ -55,11 +57,16 @@ if len(sys.argv) == 3:
 	for ER, SR in zip(E_residues_to_superimpose,S_residues_to_superimpose):
 		E_atom = AtomID(E_pose.residue(ER).atom_index("CA"), ER)
 		S_atom = AtomID(S_pose.residue(SR).atom_index("CA"), SR)
-
 		atom_map.set(E_atom,S_atom)
 
 	superimpose_pose(E_pose,S_pose,atom_map)
-	S_pose.dump_pdb(f'./TELSetta/{sys.argv[1]}.pdb')
+	E_pose.dump_pdb(f'./TELSetta/{sys.argv[1]}_in_{sys.argv[2]}_space.pdb')
+	with open (f'./TELSetta/{sys.argv[1]}_in_{sys.argv[2]}_space.pdb','a') as file:
+		with open("STEL.pdb") as s:
+			for line in s:
+				if "CRYST1" in line:
+					file.write(line)
+
 	os.remove("ETEL.pdb")
 	os.remove("ETEL.clean.pdb")
 	os.remove("STEL.pdb")
