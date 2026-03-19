@@ -14,8 +14,6 @@ from pyrosetta.rosetta.core.id import AtomID
 from pyrosetta.rosetta.core.id import AtomID_Map_AtomID as AtomID_Map
 from pyrosetta.rosetta.core.scoring import superimpose_pose
 from pyrosetta.rosetta.protocols.grafting import delete_region
-from pyrosetta.rosetta.protocols.relax import FastRelax
-from pyrosetta.rosetta.core.scoring import get_score_function
 from pyrosetta.rosetta.core.scoring.dssp import Dssp
 
 base = os.path.expanduser('~/TELSetta')
@@ -44,7 +42,7 @@ if sys.argv[1]=="1TEL":
 		TELSAM_in_9DOC = Pose()
 		temp_pose = pose_from_pdb(os.path.join(base,'ETEL.clean.pdb'))
 		os.remove(os.path.join(base,"ETEL.clean.pdb"))
-		append_subpose_to_pose(TELSAM_in_9DOC,temp_pose,temp_pose.chain_begin(1),temp_pose.chain_begin(1)+81)
+		append_subpose_to_pose(TELSAM_in_9DOC,temp_pose,temp_pose.chain_begin(1),temp_pose.chain_begin(1)+76)
 		S_pose = pose_from_pdb(os.path.join(base,'STEL.clean.pdb'))
 		S_residues_to_superimpose = range(S_pose.chain_begin(1),S_pose.chain_begin(1)+TELSAM_in_9DOC.chain_end(1)-TELSAM_in_9DOC.chain_begin(1))
 		E_residues_to_superimpose = range(TELSAM_in_9DOC.chain_begin(1),TELSAM_in_9DOC.chain_end(1))
@@ -99,7 +97,7 @@ if sys.argv[1]=="1TEL":
 					delete_region(TELSAM,TELSAM.chain_end(1)-start_residue_to_superimpose+1,TELSAM.chain_end(1))
 					delete_region(client,client.chain_begin(1),client.chain_begin(1))
 					append_pose_to_pose(TELSAM,client,new_chain=False)
-					TELSAM.conformation().declare_chemical_bond(82-start_residue_to_superimpose,"C",82-start_residue_to_superimpose+1,"N")
+					TELSAM.conformation().declare_chemical_bond(77-start_residue_to_superimpose,"C",77-start_residue_to_superimpose+1,"N")
 					#relax here?
 					#sf = get_score_function()
 					#relax = FastRelax()
