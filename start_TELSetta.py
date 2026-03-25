@@ -1,3 +1,5 @@
+
+
 #import and initialize PyRosetta and connect to the PyMOLMover server previously set up.
 
 import sys
@@ -16,9 +18,17 @@ from pyrosetta.rosetta.core.scoring import superimpose_pose
 from pyrosetta.rosetta.protocols.grafting import delete_region
 from pyrosetta.rosetta.core.scoring.dssp import Dssp
 
+from pyrosetta import PyMOLMover
+from pyrosetta.rosetta.protocols.symmetry import SetupForSymmetryMover
+from pyrosetta.rosetta.core.pose.symmetry import is_symmetric
+from pyrosetta.rosetta.protocols.relax import FastRelax
+from pyrosetta.rosetta.core.scoring import get_score_function
+
 base = os.path.expanduser('~/TELSetta')
 
-pyrosetta.init()
+pyrosetta.init("-crystal_refine -cryst::refinable_lattice -symmetry:symmetric_rmsd -score_symm_complex -symmetry_definition")
+
+pmm = PyMOLMover()
 
 if sys.argv[1]=="1TEL":
 	try:
@@ -37,7 +47,7 @@ if sys.argv[1]=="1TEL":
 			file.write(pdb_text)
 		cleanATOM(os.path.join(base,"STEL.pdb"))
 		#Don't remove the STEL.pdb yet because it has crystallographic information we want to get later.
-		
+
 		#Move 2QAR into the 9DOC asymmetric unit.
 		TELSAM_in_9DOC = Pose()
 		temp_pose = pose_from_pdb(os.path.join(base,'ETEL.clean.pdb'))
@@ -74,7 +84,6 @@ if sys.argv[1]=="1TEL":
 				ss_string = temp_pose.secstruct()
 				first_helix = ss_string.find("HHHH")
 				append_subpose_to_pose(client,temp_pose,temp_pose.chain_begin(1)+first_helix,temp_pose.chain_end(1))
-
 				start_residue_to_superimpose = 2
 				pdbs = []
 				for resi in range(first_helix,first_helix+9):
@@ -82,7 +91,6 @@ if sys.argv[1]=="1TEL":
 					start_residue_to_superimpose += 1
 					TELSAM_residues_to_superimpose = range(TELSAM.chain_end(1)-start_residue_to_superimpose,TELSAM.chain_end(1)-start_residue_to_superimpose+3)
 					client_residues_to_superimpose = range(1,4)
-
 					atom_map = AtomID_Map()
 					initialize_atomid_map(atom_map, client, AtomID())
 
@@ -90,7 +98,6 @@ if sys.argv[1]=="1TEL":
 					for CR, TR in zip(client_residues_to_superimpose,TELSAM_residues_to_superimpose):
 						client_atom = AtomID(client.residue(CR).atom_index("CA"), CR)
 						TELSAM_atom = AtomID(TELSAM.residue(TR).atom_index("CA"), TR)
-
 						atom_map.set(client_atom,TELSAM_atom)
 
 					superimpose_pose(client,TELSAM,atom_map)
@@ -98,26 +105,28 @@ if sys.argv[1]=="1TEL":
 					delete_region(client,client.chain_begin(1),client.chain_begin(1))
 					append_pose_to_pose(TELSAM,client,new_chain=False)
 					TELSAM.conformation().declare_chemical_bond(77-start_residue_to_superimpose,"C",77-start_residue_to_superimpose+1,"N")
-					#relax here?
-					#sf = get_score_function()
-					#relax = FastRelax()
-					#relax.set_scorefxn(sf)
-					#relax.apply(TELSAM)
-					TELSAM.dump_pdb(f'./TELSetta/{sys.argv[1]}_in_{sys.argv[2]}_space_{resi}.pdb')
-					with open (os.path.join(base,f'{sys.argv[1]}_in_{sys.argv[2]}_space_{resi}.pdb'),'r') as file:
+					TELSAM.dump_pdb(os.path.join(base,f'{sys.argv[1]}--{sys.argv[2]}_{resi}.pdb'))
+					with open (os.path.join(base,f'{sys.argv[1]}--{sys.argv[2]}_{resi}.pdb'),'r') as file:
 						pdb_sans_cryst = file.read()
-					with open (os.path.join(base,f'{sys.argv[1]}_in_{sys.argv[2]}_space_{resi}.pdb'),'w') as file:
+					with open (os.path.join(base,f'{sys.argv[1]}--{sys.argv[2]}_{resi}.pdb'),'w') as file:
 						with open(os.path.join(base,"STEL.pdb")) as s:
 							for line in s:
 								if "CRYST1" in line:
 									file.write(line)
 						file.write(pdb_sans_cryst)
-					pdbs.append(os.path.join(base,f'{sys.argv[1]}_in_{sys.argv[2]}_space_{resi}.pdb'))
-
-				with open(os.path.join(base,"pdb_list.txt"),"w") as file:
-					for pdb in pdbs:
-						file.write(f'{pdb}\n')
-
+					symm_pose = pose_from_pdb(os.path.join(base,f'{sys.argv[1]}--{sys.argv[2]}_{resi}.pdb'))
+					rosetta.basic.options.set_real_option("cryst:interaction_shell", 20.0)
+					makesym = rosetta.protocols.symmetry.SetupForSymmetryMover("CRYST1")
+					makesym.apply(symm_pose)
+					sf = get_score_function()
+					relax = FastRelax()
+					relax.set_scorefxn(sf)
+					relax.apply(symm_pose)
+					pmm.apply(symm_pose)
+					symm_pose.dump_pdb(os.path.join(base,f'{sys.argv[1]}--{sys.argv[2]}_symmFastRelax_{resi}.pdb'))
+					with open (os.path.join(base,f'{sys.argv[1]}--{sys.argv[2]}_symmetry_info_{resi}.symm'), 'w') as file:
+						sf.show(symm_pose)
+						
 				os.remove(os.path.join(base,"STEL.pdb"))
 				os.remove(os.path.join(base,"STEL.clean.pdb"))
 		

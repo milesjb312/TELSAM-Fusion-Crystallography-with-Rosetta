@@ -1,9 +1,0 @@
-/home/milesjb/TELSetta/1TEL_in_7TCY_space_1.pdb
-/home/milesjb/TELSetta/1TEL_in_7TCY_space_2.pdb
-/home/milesjb/TELSetta/1TEL_in_7TCY_space_3.pdb
-/home/milesjb/TELSetta/1TEL_in_7TCY_space_4.pdb
-/home/milesjb/TELSetta/1TEL_in_7TCY_space_5.pdb
-/home/milesjb/TELSetta/1TEL_in_7TCY_space_6.pdb
-/home/milesjb/TELSetta/1TEL_in_7TCY_space_7.pdb
-/home/milesjb/TELSetta/1TEL_in_7TCY_space_8.pdb
-/home/milesjb/TELSetta/1TEL_in_7TCY_space_9.pdb
