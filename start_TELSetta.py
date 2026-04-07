@@ -26,6 +26,7 @@ from pyrosetta.rosetta.protocols.symmetry import SetupForSymmetryMover
 from pyrosetta.rosetta.core.pose.symmetry import is_symmetric
 from pyrosetta.rosetta.protocols.relax import FastRelax
 from pyrosetta.rosetta.core.scoring import get_score_function
+from pyrosetta.rosetta.core.pose import addVirtualResAsRoot
 
 base = os.path.expanduser('~/TELSetta')
 
@@ -211,12 +212,22 @@ if sys.argv[1]=="1TEL":
 				symm_pose = pose_from_pdb(os.path.join(base,f'{sys.argv[1]}--{sys.argv[2]}_{resi}.pdb'))
 				
 				#Constraints on 1TEL
+				movemap = MoveMap()
+				movemap.set_bb(False)
+				movemap.set_chi(False)
+
+				# Allow movement only in the flexible region
+				print(f'FLEXIBLE RANGE: {(TELSAM.chain_end(1)-client.total_residue()-start_residue_to_superimpose,TELSAM.chain_end(1))}')
+				for i in range(TELSAM.chain_end(1)-client.total_residue()-start_residue_to_superimpose,TELSAM.chain_end(1)):
+					movemap.set_bb(i, True)
+					movemap.set_chi(i, True)
+
+				"""
 				constraints = pyrosetta.rosetta.core.scoring.constraints.ConstraintSet()
-				root_atom = None
-				for i in range(1,TELSAM_in_9DOC.chain_end(1)-client.total_residue()-start_residue_to_superimpose):
-					atom_id = pyrosetta.rosetta.core.id.AtomID(symm_pose.residue(i).atom_index("CA"),i)
-					if i == 1:
-						root_atom = atom_id
+				addVirtualResAsRoot(symm_pose)
+				root_atom = AtomID(1,symm_pose.total_residue())
+				for i in range(1,TELSAM.chain_end(1)-client.total_residue()-start_residue_to_superimpose):
+					atom_id = AtomID(symm_pose.residue(i).atom_index("CA"),i)
 					xyz = symm_pose.residue(i).xyz("CA")
 					constraint = pyrosetta.rosetta.core.scoring.constraints.CoordinateConstraint(
 						atom_id,
@@ -226,10 +237,11 @@ if sys.argv[1]=="1TEL":
 					)
 					constraints.add_constraint(constraint)
 				symm_pose.constraint_set(constraints)
+				"""
 				
 				#Score
 				sf = get_score_function()
-				sf.set_weight(rosetta.core.scoring.coordinate_constraint, 100.0)
+				#sf.set_weight(rosetta.core.scoring.coordinate_constraint, 1.0)
 				score = sf(symm_pose)
 				print(f'SCORE!!!!::::{score}')
 
@@ -243,6 +255,7 @@ if sys.argv[1]=="1TEL":
 
 				#Relax
 				relax = FastRelax()
+				relax.set_movemap(movemap)
 				relax.set_scorefxn(sf)
 				relax.apply(symm_pose)
 				if not "skip_symmetry" in sys.argv:
