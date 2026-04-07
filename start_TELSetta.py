@@ -177,24 +177,38 @@ if sys.argv[1]=="1TEL":
 				TELSAM.conformation().declare_chemical_bond(TELSAM.chain_end(1)-client.total_residue()-start_residue_to_superimpose,"C",TELSAM.chain_end(1)-client.total_residue()-start_residue_to_superimpose+1,"N")
 				#Save
 				TELSAM.dump_pdb(os.path.join(base,f'{sys.argv[1]}--{sys.argv[2]}_{resi}.pdb'))
-				
+
+				#Constraints on 1TEL
+				movemap = MoveMap()
+				movemap.set_bb(False)
+				movemap.set_chi(False)
+				for i in range(TELSAM.chain_end(1)-client.total_residue()-start_residue_to_superimpose,TELSAM.chain_end(1)):
+					movemap.set_bb(i, True)
+					movemap.set_chi(i, True)
+
+				#Get score_function
+				sf = get_score_function()
+				#Relax settings
+				relax = FastRelax()
+				relax.set_movemap(movemap)
+				relax.set_scorefxn(sf)
+
 				if not "skip_symmetry" in sys.argv:
-					#Test different unit cell sizes to dock polymers:
-					for ucdelta in range(0,40):
+					#Dock Polymers!############################
+					#Test different unit cell sizes:
+					for ucdelta in range(-20,41):
 						with open(os.path.join(base,f'{sys.argv[1]}--{sys.argv[2]}_{resi}_{ucdelta}.pdb'), 'w') as file:
-							with open(os.path.join(base,f'{sys.argv[1]}--{sys.argv[2]}_{resi}.pdb'), 'r') as s:	
-								pdb_sans_cryst = s.read()
+							with open(os.path.join(base,f'{sys.argv[1]}--{sys.argv[2]}_{resi}.pdb'), 'r') as s:
 								for line in s:
 									if "CRYST1" in line:
 										p = re.compile(r'\d+\.\d+')
 										cryst1_vals = p.findall(line)
-
 										a, b, c = [float(x) for x in cryst1_vals[0:3]]
 										alpha, beta, gamma = [float(x) for x in cryst1_vals[3:6]]
 
 										#Shrink unit cell
-										a -= 00
-										b -= 00
+										a -= ucdelta
+										b -= ucdelta
 										#c -= 0
 
 										spacegroup = line[55:66].strip()
@@ -206,68 +220,61 @@ if sys.argv[1]=="1TEL":
 											f"{spacegroup:<11}"
 											f"{z_value:>4}\n"
 										)
-										break
-							file.write(new_line)
-							file.write(pdb_sans_cryst)
+										file.write(new_line)
+									else:
+										file.write(line)
 
-				#Make new pose from fusion for clarity
-				symm_pose = pose_from_pdb(os.path.join(base,f'{sys.argv[1]}--{sys.argv[2]}_{resi}.pdb'))
-				
-				#Constraints on 1TEL
-				movemap = MoveMap()
-				movemap.set_bb(False)
-				movemap.set_chi(False)
+						#Symmetrize
+						#Make new pose from fusion for clarity
+						symm_pose = pose_from_file(os.path.join(base,f'{sys.argv[1]}--{sys.argv[2]}_{resi}_{ucdelta}.pdb'))
+						os.remove(os.path.join(base,f'{sys.argv[1]}--{sys.argv[2]}_{resi}_{ucdelta}.pdb'))
+						interaction_shell_size = 30
+						rosetta.basic.options.set_real_option("cryst:interaction_shell", interaction_shell_size)
+						makesym = SetupForSymmetryMover("CRYST1")
+						makesym.apply(symm_pose)
+						#symm_pose.dump_pdb(os.path.join(base,f'{sys.argv[1]}--{sys.argv[2]}_symm_{resi}_shellSize_{interaction_shell_size}.pdb'))
+						#relax.apply(symm_pose)
 
-				# Allow movement only in the flexible region
-				print(f'FLEXIBLE RANGE: {(TELSAM.chain_end(1)-client.total_residue()-start_residue_to_superimpose,TELSAM.chain_end(1))}')
-				for i in range(TELSAM.chain_end(1)-client.total_residue()-start_residue_to_superimpose,TELSAM.chain_end(1)):
-					movemap.set_bb(i, True)
-					movemap.set_chi(i, True)
+						#Return score
+						score = sf(symm_pose)
+						if float(score)<0:
+							with open(os.path.join(base,f'ucdelta_scores.txt'),'a') as scores:
+								scores.write(f'file: {os.path.join(base,f'{sys.argv[1]}--{sys.argv[2]}_symmFastRelax_{resi}_{ucdelta}.pdb')}\n')
+								scores.write(f'score: {score}\n')
+							symm_pose.dump_pdb(os.path.join(base,f'{sys.argv[1]}--{sys.argv[2]}_symmFastRelax_{resi}_{ucdelta}.pdb'))
+						else:
+							break
 
-				"""
-				constraints = pyrosetta.rosetta.core.scoring.constraints.ConstraintSet()
-				addVirtualResAsRoot(symm_pose)
-				root_atom = AtomID(1,symm_pose.total_residue())
-				for i in range(1,TELSAM.chain_end(1)-client.total_residue()-start_residue_to_superimpose):
-					atom_id = AtomID(symm_pose.residue(i).atom_index("CA"),i)
-					xyz = symm_pose.residue(i).xyz("CA")
-					constraint = pyrosetta.rosetta.core.scoring.constraints.CoordinateConstraint(
-						atom_id,
-						root_atom,
-						xyz,
-						pyrosetta.rosetta.core.scoring.func.HarmonicFunc(0.0,0.001)
-					)
-					constraints.add_constraint(constraint)
-				symm_pose.constraint_set(constraints)
-				"""
-				
-				#Score
-				sf = get_score_function()
-				#sf.set_weight(rosetta.core.scoring.coordinate_constraint, 1.0)
-				score = sf(symm_pose)
-				print(f'SCORE!!!!::::{score}')
+						#Show in PyMOL
+						pmm.apply(symm_pose)
+					
+					file_scores = {}
+					if os.path.exists(os.path.join(base,f'ucdelta_scores')):
+						with open(os.path.join(base,f'ucdelta_scores'),'r') as scores:						
+							lines = iter(scores)
+							for line in lines:
+								line.strip()
+								if line.startswith('file: '):
+									file = line.removeprefix('file: ').strip()
+									score_line = next(lines).strip()
+									if score_line.startswith('score: '):
+										score = float(score_line.removeprefix('score: ').strip())
+										file_scores[file] = score
 
-				if not "skip_symmetry" in sys.argv:
-					#Symmetrize
-					interaction_shell_size = 30
-					rosetta.basic.options.set_real_option("cryst:interaction_shell", interaction_shell_size)
-					makesym = SetupForSymmetryMover("CRYST1")
-					makesym.apply(symm_pose)
-					symm_pose.dump_pdb(os.path.join(base,f'{sys.argv[1]}--{sys.argv[2]}_symm_{resi}_shellSize_{interaction_shell_size}.pdb'))
+						min(file_scores.values())
 
-				#Relax
-				relax = FastRelax()
-				relax.set_movemap(movemap)
-				relax.set_scorefxn(sf)
-				relax.apply(symm_pose)
-				if not "skip_symmetry" in sys.argv:
-					symm_pose.dump_pdb(os.path.join(base,f'{sys.argv[1]}--{sys.argv[2]}_symmFastRelax_{resi}_shellSize_{interaction_shell_size}.pdb'))
 				else:
-					symm_pose.dump_pdb(os.path.join(base,f'{sys.argv[1]}--{sys.argv[2]}_FastRelax_{resi}.pdb'))
+					asymm_pose = pose_from_file(os.path.join(base,f'{sys.argv[1]}--{sys.argv[2]}_{resi}.pdb'))
+					relax.apply(asymm_pose)
+					asymm_pose.dump_pdb(os.path.join(base,f'{sys.argv[1]}--{sys.argv[2]}_FastRelax_{resi}.pdb'))
 
-				#Show in PyMOL
-				pmm.apply(symm_pose)
-	
+					#Return score
+					score = sf(symm_pose)
+					print(f'SCORE!!!!::::{score}')
+
+					#Show in PyMOL
+					pmm.apply(symm_pose)
+
 		except Exception as e:
 			print(e,file=sys.stderr)
 			sys.exit()
