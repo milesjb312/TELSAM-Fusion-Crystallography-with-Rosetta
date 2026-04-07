@@ -61,8 +61,8 @@ def remake_TELSAM():
 	S_pose = pose_from_pdb(os.path.join(base,'STEL.clean.pdb'))
 	os.remove(os.path.join(base,"STEL.clean.pdb"))
 
-	# Map CA atoms between residues
-	S_residues_to_superimpose = range(S_pose.chain_begin(1),S_pose.chain_begin(1)+TELSAM_in_9DOC.chain_end(1)-TELSAM_in_9DOC.chain_begin(1))
+	#Map CA atoms between residues
+	S_residues_to_superimpose = range(S_pose.chain_begin(1),S_pose.chain_begin(1)+TELSAM_in_9DOC.total_residue())
 	E_residues_to_superimpose = range(TELSAM_in_9DOC.chain_begin(1),TELSAM_in_9DOC.chain_end(1))
 	atom_map = AtomID_Map()
 	initialize_atomid_map(atom_map, TELSAM_in_9DOC, AtomID())
@@ -71,6 +71,24 @@ def remake_TELSAM():
 		S_atom = AtomID(S_pose.residue(SR).atom_index("CA"), SR)
 		atom_map.set(E_atom,S_atom)
 	superimpose_pose(TELSAM_in_9DOC,S_pose,atom_map)
+
+	helix_extender = Pose()
+	append_subpose_to_pose(helix_extender,TELSAM_in_9DOC,TELSAM_in_9DOC.chain_end(1)-10,TELSAM_in_9DOC.chain_end(1))
+	T_residues_to_superimpose = range(TELSAM_in_9DOC.chain_end(1)-3,TELSAM_in_9DOC.chain_end(1)+1)
+	H_residues_to_superimpose = range(helix_extender.chain_begin(1),helix_extender.chain_begin(1)+4)
+	helix_atom_map = AtomID_Map()
+	initialize_atomid_map(helix_atom_map, helix_extender, AtomID())
+	for HR, TR in zip(H_residues_to_superimpose,T_residues_to_superimpose):
+		H_atom = AtomID(helix_extender.residue(HR).atom_index("CA"), HR)
+		T_atom = AtomID(TELSAM_in_9DOC.residue(TR).atom_index("CA"), TR)
+		helix_atom_map.set(H_atom,T_atom)
+	superimpose_pose(helix_extender,TELSAM_in_9DOC,helix_atom_map)
+	#Delete overlap
+	delete_region(TELSAM_in_9DOC,TELSAM_in_9DOC.chain_end(1)-3,TELSAM_in_9DOC.chain_end(1))
+	#Fuse
+	append_pose_to_pose(TELSAM_in_9DOC,helix_extender,new_chain=False)
+	TELSAM_in_9DOC.conformation().declare_chemical_bond(TELSAM_in_9DOC.chain_end(1)-helix_extender.total_residue(),"C",TELSAM_in_9DOC.chain_end(1)-helix_extender.total_residue()+1,"N")
+
 	TELSAM_in_9DOC.dump_pdb(os.path.join(base,f'TELSAM_in_9DOC.pdb'))
 	last_size = -1
 	while True:
@@ -87,28 +105,8 @@ def remake_TELSAM():
 		with open(os.path.join(base,"STEL.pdb")) as s:
 			for line in s:
 				if "CRYST1" in line:
-					#Extract numeric fields (a, b, c, alpha, beta, gamma)
-					p = re.compile(r'\d+\.\d+')
-					cryst1_vals = p.findall(line)
-
-					a, b, c = [float(x) for x in cryst1_vals[0:3]]
-					alpha, beta, gamma = [float(x) for x in cryst1_vals[3:6]]
-
-					#Shrink unit cell
-					a -= 00
-					b -= 00
-					#c -= 0
-
-					spacegroup = line[55:66].strip()
-					z_value = line[66:].strip()
-					new_line = (
-						f"CRYST1"
-						f"{a:9.3f}{b:9.3f}{c:9.3f}"
-						f"{alpha:7.2f}{beta:7.2f}{gamma:7.2f} "
-						f"{spacegroup:<11}"
-						f"{z_value:>4}\n"
-					)
-					file.write(new_line)
+					file.write(line)
+					break
 		file.write(pdb_sans_cryst)
 	if os.path.exists(os.path.join(base,"STEL.pdb")):
 		os.remove(os.path.join(base,"STEL.pdb"))
@@ -154,7 +152,7 @@ if sys.argv[1]=="1TEL":
 			#Align the two helices:
 			start_residue_to_superimpose = 1
 			pdbs = []
-			for resi in range(first_helix,first_helix+9):
+			for resi in range(first_helix,first_helix+14):
 				TELSAM = TELSAM_in_9DOC.clone()
 				start_residue_to_superimpose += 1
 				TELSAM_residues_to_superimpose = range(TELSAM.chain_end(1)-start_residue_to_superimpose,TELSAM.chain_end(1)-start_residue_to_superimpose+3)
@@ -167,23 +165,55 @@ if sys.argv[1]=="1TEL":
 					client_atom = AtomID(client.residue(CR).atom_index("CA"), CR)
 					TELSAM_atom = AtomID(TELSAM.residue(TR).atom_index("CA"), TR)
 					atom_map.set(client_atom,TELSAM_atom)
-
 				superimpose_pose(client,TELSAM,atom_map)
 
 				#Delete overlap
 				delete_region(TELSAM,TELSAM.chain_end(1)-start_residue_to_superimpose,TELSAM.chain_end(1))
 				#Fuse
 				append_pose_to_pose(TELSAM,client,new_chain=False)
-				TELSAM.conformation().declare_chemical_bond(77-start_residue_to_superimpose,"C",77-start_residue_to_superimpose+1,"N")
+				TELSAM.conformation().declare_chemical_bond(TELSAM.chain_end(1)-client.total_residue()-start_residue_to_superimpose,"C",TELSAM.chain_end(1)-client.total_residue()-start_residue_to_superimpose+1,"N")
 				#Save
 				TELSAM.dump_pdb(os.path.join(base,f'{sys.argv[1]}--{sys.argv[2]}_{resi}.pdb'))
+				
+				if not "skip_symmetry" in sys.argv:
+					#Test different unit cell sizes to dock polymers:
+					for ucdelta in range(0,40):
+						with open(os.path.join(base,f'{sys.argv[1]}--{sys.argv[2]}_{resi}_{ucdelta}.pdb'), 'w') as file:
+							with open(os.path.join(base,f'{sys.argv[1]}--{sys.argv[2]}_{resi}.pdb'), 'r') as s:	
+								pdb_sans_cryst = s.read()
+								for line in s:
+									if "CRYST1" in line:
+										p = re.compile(r'\d+\.\d+')
+										cryst1_vals = p.findall(line)
+
+										a, b, c = [float(x) for x in cryst1_vals[0:3]]
+										alpha, beta, gamma = [float(x) for x in cryst1_vals[3:6]]
+
+										#Shrink unit cell
+										a -= 00
+										b -= 00
+										#c -= 0
+
+										spacegroup = line[55:66].strip()
+										z_value = line[66:].strip()
+										new_line = (
+											f"CRYST1"
+											f"{a:9.3f}{b:9.3f}{c:9.3f}"
+											f"{alpha:7.2f}{beta:7.2f}{gamma:7.2f} "
+											f"{spacegroup:<11}"
+											f"{z_value:>4}\n"
+										)
+										break
+							file.write(new_line)
+							file.write(pdb_sans_cryst)
+
 				#Make new pose from fusion for clarity
 				symm_pose = pose_from_pdb(os.path.join(base,f'{sys.argv[1]}--{sys.argv[2]}_{resi}.pdb'))
 				
 				#Constraints on 1TEL
 				constraints = pyrosetta.rosetta.core.scoring.constraints.ConstraintSet()
 				root_atom = None
-				for i in range(1,77-start_residue_to_superimpose):
+				for i in range(1,TELSAM_in_9DOC.chain_end(1)-client.total_residue()-start_residue_to_superimpose):
 					atom_id = pyrosetta.rosetta.core.id.AtomID(symm_pose.residue(i).atom_index("CA"),i)
 					if i == 1:
 						root_atom = atom_id
@@ -192,14 +222,14 @@ if sys.argv[1]=="1TEL":
 						atom_id,
 						root_atom,
 						xyz,
-						pyrosetta.rosetta.core.scoring.func.HarmonicFunc(0.0,0.1)
+						pyrosetta.rosetta.core.scoring.func.HarmonicFunc(0.0,0.001)
 					)
 					constraints.add_constraint(constraint)
 				symm_pose.constraint_set(constraints)
 				
 				#Score
 				sf = get_score_function()
-				sf.set_weight(rosetta.core.scoring.coordinate_constraint, 2.0)
+				sf.set_weight(rosetta.core.scoring.coordinate_constraint, 100.0)
 				score = sf(symm_pose)
 				print(f'SCORE!!!!::::{score}')
 
@@ -209,12 +239,16 @@ if sys.argv[1]=="1TEL":
 					rosetta.basic.options.set_real_option("cryst:interaction_shell", interaction_shell_size)
 					makesym = SetupForSymmetryMover("CRYST1")
 					makesym.apply(symm_pose)
-					symm_pose.dump_pdb(os.path.join(base,f'{sys.argv[1]}--{sys.argv[2]}_symmFastRelax_{resi}_shellSize_{interaction_shell_size}.pdb'))
+					symm_pose.dump_pdb(os.path.join(base,f'{sys.argv[1]}--{sys.argv[2]}_symm_{resi}_shellSize_{interaction_shell_size}.pdb'))
 
 				#Relax
 				relax = FastRelax()
 				relax.set_scorefxn(sf)
 				relax.apply(symm_pose)
+				if not "skip_symmetry" in sys.argv:
+					symm_pose.dump_pdb(os.path.join(base,f'{sys.argv[1]}--{sys.argv[2]}_symmFastRelax_{resi}_shellSize_{interaction_shell_size}.pdb'))
+				else:
+					symm_pose.dump_pdb(os.path.join(base,f'{sys.argv[1]}--{sys.argv[2]}_FastRelax_{resi}.pdb'))
 
 				#Show in PyMOL
 				pmm.apply(symm_pose)
