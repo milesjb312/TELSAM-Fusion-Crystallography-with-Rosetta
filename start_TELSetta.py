@@ -11,6 +11,7 @@ import time
 import pyrosetta
 from pyrosetta import *
 from pyrosetta.toolbox import cleanATOM
+from pyrosetta.toolbox.mutants import mutate_residue
 from pyrosetta.rosetta.core.pose import append_subpose_to_pose
 from pyrosetta.rosetta.core.pose import append_pose_to_pose
 from pyrosetta.rosetta.core.pose import initialize_atomid_map
@@ -57,6 +58,7 @@ def remake_TELSAM():
 	#Move 2QAR into the 9DOC asymmetric unit.
 	TELSAM_in_9DOC = Pose()
 	temp_pose = pose_from_pdb(os.path.join(base,'ETEL.clean.pdb'))
+	mutate_residue(temp_pose,67,"V",5)
 	os.remove(os.path.join(base,"ETEL.clean.pdb"))
 	append_subpose_to_pose(TELSAM_in_9DOC,temp_pose,temp_pose.chain_begin(1),temp_pose.chain_begin(1)+76)
 	S_pose = pose_from_pdb(os.path.join(base,'STEL.clean.pdb'))
