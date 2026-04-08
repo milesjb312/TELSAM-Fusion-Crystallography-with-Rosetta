@@ -163,6 +163,10 @@ if sys.argv[1]=="1TEL":
 			#Align the two helices:
 			start_residue_to_superimpose = 1
 			pdbs = []
+			if os.path.exists(os.path.join(base,f'ucdelta_scores.txt')):
+				os.remove(os.path.join(base,f'ucdelta_scores.txt'))
+			if os.path.exists(os.path.join(base,f'deg_scores.txt')):
+				os.remove(os.path.join(base,f'deg_scores.txt'))
 			for resi in range(first_helix,first_helix+14):
 				TELSAM = TELSAM_in_9DOC.clone()
 				start_residue_to_superimpose += 1
@@ -241,8 +245,6 @@ if sys.argv[1]=="1TEL":
 						######################################## DOCK POLYMERS! ############################
 						#Test different unit cell sizes:
 						min_score = 100000
-						if os.path.exists(os.path.join(base,f'ucdelta_scores.txt')):
-							os.remove(os.path.join(base,f'ucdelta_scores.txt'))
 						for ucdelta in range(int(a-x_coord*2),int(a-x_coord*2+5)):
 							with open(os.path.join(base,f'{sys.argv[1]}--{sys.argv[2]}_{resi}_{ucdelta}.pdb'), 'w') as file:
 								with open(os.path.join(base,f'{sys.argv[1]}--{sys.argv[2]}_{resi}.pdb'), 'r') as s:
@@ -305,8 +307,6 @@ if sys.argv[1]=="1TEL":
 							pmm.apply(symm_pose)
 
 							##################################### ROTATE UNIT CELL! ###############################
-							if os.path.exists(os.path.join(base,f'deg_scores.txt')):
-								os.remove(os.path.join(base,f'deg_scores.txt'))
 							for deg in range(1,61):
 								#Make new pose from fusion for clarity
 								symm_pose = pose_from_file(os.path.join(base,f'{sys.argv[1]}--{sys.argv[2]}_{resi}_{ucdelta}.pdb'))
