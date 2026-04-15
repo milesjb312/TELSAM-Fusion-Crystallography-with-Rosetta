@@ -1,4 +1,0 @@
-Linker file: /home/milesjb/TELSetta/1TEL--7TCY_1.pdb
-score: 40.509911080608155
-Unit Cell AB File: /home/milesjb/TELSetta/1TEL--7TCY_1_100.pdb
-Score: 5902.569727864686
