@@ -196,7 +196,7 @@ def scilter(symm_pose,min_score,er_cutoff,min_score_pdb,current_pdb,last_pdb,sco
 				scores.write(f'{scored_file_name}: {current_pdb}\n')
 				scores.write(f'Score: {score}\n')
 				specs = str(current_pdb).split("_")
-				for spec in range(specs):
+				for spec in range(len(specs)):
 					if str(os.path.join(base,f'{sys.argv[1]}--{sys.argv[2]}')) in specs[spec]:
 						if len(specs)==spec+3:
 							energies_vs_ucab_vs_deg['linker'] = specs[spec+1]
