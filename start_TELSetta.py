@@ -216,6 +216,7 @@ def chart(linker):
 	doi = [deg for deg, l in zip(energies_vs_ucab_vs_deg['deg'],energies_vs_ucab_vs_deg['linker']) if l == linker]
 	eoi = [energy for energy, l in zip(energies_vs_ucab_vs_deg['energy'],energies_vs_ucab_vs_deg['linker']) if l == linker]
 	ax.scatter(aboi,doi,eoi)
+	ax.set_title(f'Energies of AB:Degree Combinations for {sys.argv[1]}--{sys.argv[2]}_{linker}')
 	ax.set_xlabel('Unit Cell AB Length (Angstroms)')
 	ax.set_ylabel('Degree of Polymer Rotation (Degrees)')
 	ax.set_zlabel('Energy (REU)')
