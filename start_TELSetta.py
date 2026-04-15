@@ -198,7 +198,7 @@ def scilter(symm_pose,min_score,er_cutoff,min_score_pdb,current_pdb,last_pdb,sco
 				specs = str(current_pdb).split("_")
 				for spec in range(len(specs)):
 					if str(os.path.join(base,f'{sys.argv[1]}--{sys.argv[2]}')) in specs[spec]:
-						if len(specs)==spec+3:
+						if len(specs)==spec+4:
 							energies_vs_ucab_vs_deg['linker'] = specs[spec+1]
 							energies_vs_ucab_vs_deg["ucab"] = specs[spec+2]
 							energies_vs_ucab_vs_deg["deg"] = specs[spec+3]
