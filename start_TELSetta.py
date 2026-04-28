@@ -46,8 +46,11 @@ class TELSetta:
 		self.unit_cell_ab = None
 		self.degree_rotation = None
 		self.remake_TELSAM_bool = False
+		self.optimize = False
+		self.centroids = True
+		self.scores = {}
 		try:
-			optlist, args = getopt.getopt(sys.argv[1:], "t:c:l:u:d:r:")
+			optlist, args = getopt.getopt(sys.argv[1:], "t:c:l:u:d:r:o")
 			for o, a in optlist:
 				if o == '-t':
 					if a != "1TEL":
@@ -65,26 +68,33 @@ class TELSetta:
 						self.unit_cell_ab = float(a)
 				elif o == '-d':
 					if a!="":
-						self.degree_rotation = int(a)
+						self.degree_rotation = int(float(a))
 				elif o =='-r':
 					self.remake_TELSAM_bool = a.upper() in ['T','TRUE',1]
+				elif o == '-o':
+					self.optimize = True
 				else:
 					print(f'Unhandled argument: {o}')
 					sys.exit(1)
 			if args:
 				print(f'Unexpected arguments: {args}')
 				sys.exit(1)
+			if not self.optimize:
+				self.centroids = False
 		except getopt.GetoptError as err:
 			print(err)
 			sys.exit(1)
 
-		self.base = os.path.expanduser('~/TELSetta')
+		self.base = os.path.join(os.path.expanduser('~/TELSetta'),str(self.linker_variant))
+		os.makedirs(self.base,exist_ok=True)
 		self.pmm = PyMOLMover()
 		self.pmm.keep_history(True)
 		self.energies_vs_ucab_vs_deg = {'linker':[],'energy':[],'ucab':[],'deg':[]}
 		self.furthest_x = 0
+		self.to_centroid = SwitchResidueTypeSetMover("centroid")
+		self.to_fullatom = SwitchResidueTypeSetMover("fa_standard")
 		self.validate_TELSAM()
-
+		
 	def remake_TELSAM(self):
 		if os.path.exists(os.path.join(self.base,f'TELSAM_in_9DOC.pdb')):
 			os.remove(os.path.join(self.base,f'TELSAM_in_9DOC.pdb'))
@@ -201,6 +211,8 @@ class TELSetta:
 
 	def change_deg(self,current_ucab_pdb,deg):
 		symm_pose = pose_from_file(current_ucab_pdb)
+		if self.centroids:
+			self.to_centroid.apply(symm_pose)
 		theta = math.radians(deg)
 		R = xyzMatrix_double_t()
 		R.xx = math.cos(theta)
@@ -235,7 +247,7 @@ class TELSetta:
 							self.energies_vs_ucab_vs_deg['linker'].append(int(specs[spec+1]))
 							self.energies_vs_ucab_vs_deg["ucab"].append(float(specs[spec+2]))
 							self.energies_vs_ucab_vs_deg["deg"].append(float(specs[spec+3].removesuffix(".pdb")))
-							self.energies_vs_ucab_vs_deg['energy'].append(float(min_score))
+							self.energies_vs_ucab_vs_deg['energy'].append(float(score))
 		if 0<score<=min_score*er_cutoff or score<0:
 			if score<min_score:
 				#Add these lines back in if you no longer want to see all the previous minimum-scoring PDBs
@@ -243,6 +255,8 @@ class TELSetta:
 				#	os.remove(min_score_pdb)
 				min_score = score
 				min_score_pdb = current_pdb
+				if self.centroids:
+					self.to_fullatom.apply(symm_pose)
 				self.pmm.apply(symm_pose)
 			if last_pdb!=None:
 				if os.path.exists(last_pdb) and last_pdb!= min_score_pdb:
@@ -282,7 +296,10 @@ class TELSetta:
 				row.append(lookup.get((unit_cell_ab,degree_rotation),0))
 			array_data.append(row)
 		energy_array = np.array(array_data)
-		ax = fig.add_subplot()
+		n_rows = len(doi_set_list)
+		n_cols = len(aboi_set_list)
+		cell_size=3
+		fig,ax = plt.subplots(figsize=(n_cols * cell_size,n_rows*cell_size))
 		im = ax.imshow(energy_array)
 		ax.set_xticks(range(len(aboi_set_list)),labels=aboi_set_list)
 		ax.set_yticks(range(len(doi_set_list)),labels=doi_set_list)
@@ -291,11 +308,8 @@ class TELSetta:
 				text = ax.text(j,i,"{:.3e}".format(energy_array[i,j]),
 				   ha='center',va='center',color='w')
 		ax.set_title(f'Energies of AB:Degree Combinations for {self.TELSAM_version}--{self.client_pdb}_{linker}')
-		fig.tight_layout()
-		plt.show()
 		fig.savefig(os.path.join(self.base,f"Energies of AB_Degree Combinations for {self.TELSAM_version}--{self.client_pdb}_{linker}"))
-		plt.close(fig)
-		with open(os.path.join(self.base,f"{linker}_chart.json","w")) as file:
+		with open(os.path.join(self.base,f"{linker}_chart.json"),"w") as file:
 			json.dump(data,file,indent=4)
 
 		"""
@@ -393,6 +407,8 @@ class TELSetta:
 			self.TELSAM.dump_pdb(self.current_linker_pdb)
 			
 			#Filter:
+			if self.centroids:
+				self.to_centroid.apply(self.TELSAM)
 			score = self.sf(self.TELSAM)
 			if score<10000:
 				#Record self.base score of linker variant:
@@ -412,8 +428,12 @@ class TELSetta:
 		rosetta.basic.options.set_real_option("cryst:interaction_shell", self.interaction_shell_size)
 		self.makesym = SetupForSymmetryMover("CRYST1")
 
+		self.sf = None
 		#Get score_function
-		self.sf = get_score_function()
+		if self.centroids:
+			self.sf = create_score_function("cen_std")
+		else:
+			self.sf = get_score_function()
 
 		#Relax mover
 		self.relax = FastRelax()
@@ -423,12 +443,13 @@ class TELSetta:
 		self.tf.push_back(InitializeFromCommandline())
 		self.tf.push_back(RestrictToRepacking())
 
-		self.packer = PackRotamersMover(self.sf)
-		self.packer.task_factory(self.tf)
+		if not self.centroids:
+			self.packer = PackRotamersMover(self.sf)
+			self.packer.task_factory(self.tf)
 
-		self.min_mover = MinMover()
-		self.min_mover.score_function(self.sf)
-		self.min_mover.min_type("lbfgs_armijo_nonmonotone")
+			self.min_mover = MinMover()
+			self.min_mover.score_function(self.sf)
+			self.min_mover.min_type("lbfgs_armijo_nonmonotone")
 
 		####################### MOVEMAP REFINEMENT (Must be re-setup after pose is symmetrized) #################
 		#It may be okay to just have it here and then call the min_mover.movemap and relax.set_movemap functions later.
@@ -439,11 +460,12 @@ class TELSetta:
 			movemap.set_bb(i, True)
 			movemap.set_chi(i, True)
 		#Refine gently
-		self.min_mover.movemap(movemap)
-		#self.packer.apply(pose)
-		self.min_mover.apply(pose)
-		self.relax.set_movemap(movemap)
-		self.relax.apply(pose)
+		if not self.centroids:
+			self.min_mover.movemap(movemap)
+			#self.packer.apply(pose)
+			self.min_mover.apply(pose)
+			self.relax.set_movemap(movemap)
+			self.relax.apply(pose)
 		##############################################################################################
 
 	def stepper(self):
@@ -452,10 +474,34 @@ class TELSetta:
 		min_score = 200000
 		min_score_pdb = None
 		min_ucab_pdb = None
-		for ucab in range(int(self.furthest_x*2-17),int(self.furthest_x-30),-1):
+		ucab_start = None
+		ucab_end = None
+		ucab1 = None
+		if self.optimize:
+			if self.unit_cell_ab!=None:
+				ucab_start = int(self.unit_cell_ab)
+				ucab_end = int(self.unit_cell_ab-30)
+			else:
+				ucab_start = int(self.furthest_x*2)
+				ucab_end = int(self.furthest_x-30)
+			if self.degree_rotation!=None:
+				deg_start = self.degree_rotation
+				deg_end = self.degree_rotation+20
+			else:
+				deg_start = 1
+				deg_end = 21
+		else:
+			ucab_start = int(self.furthest_x*2)
+			ucab_end = int(self.furthest_x-30)
+			deg_start = 1
+			deg_end = 21
+
+		for ucab in range(ucab_start,ucab_end,-1):
 			current_ucab_pdb = os.path.join(self.base,f'{self.TELSAM_version}--{self.client_pdb}_{self.linker_variant}_{ucab}.pdb')
 			self.change_cell(self.current_linker_pdb,current_ucab_pdb,wa=ucab,wb=ucab)
 			symm_pose = pose_from_file(current_ucab_pdb)
+			if self.centroids:
+				self.to_centroid.apply(symm_pose)
 			self.makesym.apply(symm_pose)
 			min_score,min_score_pdb,exceeded = self.scilter(symm_pose,min_score,1.1,min_score_pdb,current_ucab_pdb,os.path.join(self.base,f'{self.TELSAM_version}--{self.client_pdb}_{self.linker_variant}_{ucab+1}.pdb'),'Unit Cell AB File')
 			if exceeded:
@@ -468,18 +514,22 @@ class TELSetta:
 			ucab = ucab1
 			min_score = 200000
 			min_score_pdb = None
-			for deg in range(1,21):
+			for deg in range(deg_start-1,deg_end):
 				current_deg_pdb = os.path.join(self.base,f'{min_ucab_pdb.removesuffix(".pdb")}_{deg}.pdb')
-				for ucab2 in range(ucab,int(self.furthest_x+30),-1):
+				for ucab2 in range(ucab,ucab_end,-1):
 					current_ucab2_deg_pdb = os.path.join(self.base,f'{min_ucab_pdb.removesuffix(f"{ucab1}.pdb")}{ucab2}_{deg}.pdb')
 					self.change_cell(min_ucab_pdb,current_ucab2_deg_pdb,wa=ucab2,wb=ucab2)
 					symm_pose = self.change_deg(current_ucab2_deg_pdb,deg)
 					self.makesym.apply(symm_pose)
-					self.pmm.apply(symm_pose)
 					min_score,min_score_pdb,exceeded = self.scilter(symm_pose,min_score,1.1,min_score_pdb,current_ucab2_deg_pdb,os.path.join(self.base,f'{min_ucab_pdb.removesuffix(f"{ucab1}.pdb")}_{ucab2+1}_{deg}.pdb'),'Temp Unit Cell AB2 Deg File')
+					if self.centroids:
+						self.to_fullatom.apply(symm_pose)
+					self.pmm.apply(symm_pose)
 					if exceeded:
 						ucab = ucab2
 						break
+				if self.centroids:
+					self.to_centroid.apply(symm_pose)
 				min_score,min_score_pdb,exceeded = self.scilter(symm_pose,min_score,3,min_score_pdb,current_ucab2_deg_pdb,None,'Unit Cell AB2 Deg File')
 				#EITHER leave this alone (meaning you will always test all the degrees in the range) OR calculate the angle between the linker vector and
 				#the furthest edge of the linker, because that angle has to be the starter angle for whichever degree check is opposite
@@ -489,19 +539,24 @@ class TELSetta:
 			ucab = ucab1
 			min_score = 200000
 			min_score_pdb = None
-			for deg in range(-1,-21,-1):
+			for deg in range(-deg_start,-deg_end,-1):
 				current_deg_pdb = os.path.join(self.base,f'{min_ucab_pdb.removesuffix(".pdb")}_{deg}.pdb')
-				for ucab2 in range(ucab,int(self.furthest_x+30),-1):
+				for ucab2 in range(ucab,ucab_end,-1):
 					current_ucab2_deg_pdb = os.path.join(self.base,f'{min_ucab_pdb.removesuffix(f"{ucab1}.pdb")}{ucab2}_{deg}.pdb')
 					self.change_cell(min_ucab_pdb,current_ucab2_deg_pdb,wa=ucab2,wb=ucab2)
 					symm_pose = self.change_deg(current_ucab2_deg_pdb,deg)
 					self.makesym.apply(symm_pose)
-					self.pmm.apply(symm_pose)
 					min_score,min_score_pdb,exceeded = self.scilter(symm_pose,min_score,1.1,min_score_pdb,current_ucab2_deg_pdb,os.path.join(self.base,f'{min_ucab_pdb.removesuffix(f"{ucab1}.pdb")}_{ucab2+1}_{deg}.pdb'),'Temp Unit Cell AB2 Deg File')
+					if self.centroids:
+						self.to_fullatom.apply(symm_pose)
+					self.pmm.apply(symm_pose)
 					if exceeded:
 						ucab = ucab2 #This assumes that client proteins are not too concave (pointing in toward the polymer vector)
 						break
+				if self.centroids:
+					self.to_centroid.apply(symm_pose)
 				min_score,min_score_pdb,exceeded = self.scilter(symm_pose,min_score,3,min_score_pdb,current_ucab2_deg_pdb,None,'Unit Cell AB2 Deg File')
+			
 			self.chart(self.linker_variant)
 
 		"""
@@ -518,23 +573,30 @@ class TELSetta:
 		"""
 
 	def picker(self):
-		current_ucab_pdb = os.path.join(self.base,f'{self.TELSAM_version}--{self.client_pdb}_{self.linker_variant}_{self.unit_cell_ab}.pdb')
+		current_ucab_pdb = os.path.join(self.base,f'{self.TELSAM_version}--{self.client_pdb}_{self.linker_variant}_{str(int(float(self.unit_cell_ab)))}.pdb')
 		self.change_cell(self.current_linker_pdb,current_ucab_pdb,wa=self.unit_cell_ab,wb=self.unit_cell_ab)
 		current_deg_pdb = os.path.join(self.base,f'{current_ucab_pdb.removesuffix(".pdb")}_{self.degree_rotation}.pdb')
 		symm_pose = self.change_deg(current_ucab_pdb,self.degree_rotation)
+		sequence = symm_pose.sequence()
+		if self.centroids:
+			self.to_centroid.apply(symm_pose)
 		self.makesym.apply(symm_pose)
-		self.pmm.apply(symm_pose)
 		score = self.sf(symm_pose)
 		print(f'Score of {current_deg_pdb}: {score}')
+		with open (f'{current_deg_pdb.removesuffix('.pdb')}.fasta', 'w') as f:
+			f.write(">"+current_deg_pdb+", score (REU): "+"{:.3e}".format(score)+"\n"+str(sequence).strip('X'))
 		symm_pose.dump_pdb(current_deg_pdb)
+		if self.centroids:
+			self.to_fullatom.apply(symm_pose)
+		self.pmm.apply(symm_pose)
 
 def main():
 	TELSetta1 = TELSetta()
 	if TELSetta1.TELSAM_version=="1TEL" and TELSetta1.client_pdb!=None:
 		TELSetta1.fuse()
-		if TELSetta1.unit_cell_ab==None and TELSetta1.degree_rotation==None:
+		if bool(TELSetta1.unit_cell_ab==None and TELSetta1.degree_rotation==None) or TELSetta1.optimize==True:
 			TELSetta1.stepper()
-		elif TELSetta1.unit_cell_ab!=None and TELSetta1.degree_rotation!=None:
+		elif TELSetta1.unit_cell_ab!=None and TELSetta1.degree_rotation!=None and TELSetta1.optimize==False:
 			TELSetta1.picker()
 		else:
 			print(f"Not enough arguments were provided to pick a specific TELSAM--fusion variant to model.")
