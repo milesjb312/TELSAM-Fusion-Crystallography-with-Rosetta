@@ -1,3 +1,7 @@
+#The default command to run this program on a given client is:
+#bash TELSetta.sh -c "7TCY" -r true -l "1"
+#This remakes the 1TEL subunit, fuses it to your client once, and tests the different alignments of the polymers to see which is best.
+
 TELSAM_version="1TEL"
 pymol_setting="true"
 linker_variant=""
@@ -87,4 +91,8 @@ else
         cmd=("${cmd_base[@]}" -l "$linker_variant")
     fi
     "${cmd[@]}"
+    fasta="$HOME/TELSetta/${linker_variant}/${TELSAM_version}--${client}_${linker_variant}_${min_ab}_${min_d}.fasta"
+    fastout="$HOME/TELSetta/${TELSAM_version}--${client}_${linker_variant}_${min_ab}_${min_d}_gene.fasta"
+    echo "fasta:$fasta fastout:$fastout"
+    GeneDesigner2.exe "$fasta" "$fastout" "None"
 fi
