@@ -25,7 +25,7 @@ do
 done
 
 cmd_base=(
-    python ~/TELSetta/start_TELSetta.py \
+    python ~/TELSAM-Fusion-Crystallography-with-Rosetta/start_TELSetta.py \
     -t "$TELSAM_version" \
     -c "$client" \
     -u "$unit_cell_ab" \
@@ -43,7 +43,7 @@ if [ "$linker_variant" = "" ]; then
             echo "Launching $linker_variant/14"
             cmd=("${cmd_base[@]}" -l "$linker_variant" -o)
             "${cmd[@]}"
-            file="$HOME/TELSetta/${linker_variant}/${linker_variant}_chart.json"
+            file="$HOME/TELSAM-Fusion-Crystallography-with-Rosetta/${linker_variant}/${linker_variant}_chart.json"
             result=$(jq '
                 [
                     range(0; (.eoi | length)) as $i
@@ -59,7 +59,7 @@ if [ "$linker_variant" = "" ]; then
             min_ab=$(echo "$result" | jq -r '.aboi')
             min_d=$(echo "$result" | jq -r '.doi')
             mcmd=(
-                python ~/TELSetta/start_TELSetta.py \
+                python ~/TELSAM-Fusion-Crystallography-with-Rosetta/start_TELSetta.py \
                 -t "$TELSAM_version" \
                 -c "$client" \
                 -u "$min_ab" \
@@ -68,8 +68,8 @@ if [ "$linker_variant" = "" ]; then
                 -l "$linker_variant" 
             )
             "${mcmd[@]}"
-            #fasta="$HOME/TELSetta/${linker_variant}/${TELSAM_version}--${client}_${linker_variant}_${min_ab}_${min_d}.fasta"
-            #fastout="$HOME/TELSetta/${TELSAM_version}--${client}_${linker_variant}_${min_ab}_${min_d}_gene.fasta"
+            #fasta="$HOME/TELSAM-Fusion-Crystallography-with-Rosetta/${linker_variant}/${TELSAM_version}--${client}_${linker_variant}_${min_ab}_${min_d}.fasta"
+            #fastout="$HOME/TELSAM-Fusion-Crystallography-with-Rosetta/${TELSAM_version}--${client}_${linker_variant}_${min_ab}_${min_d}_gene.fasta"
             #echo "fasta:$fasta fastout:$fastout"
             #GeneDesigner2.exe "$fasta" "$fastout" "None"
         ) &
@@ -81,7 +81,7 @@ if [ "$linker_variant" = "" ]; then
 #If a linker variant is provided, connect to PyMOL. Run the stepper program if optimize is enabled. Otherwise, run the picker program.
 else
     if [ "$pymol_setting" = "true" ]; then
-        pymol ~/TELSetta/start_pymol_server.pml &
+        pymol ~/TELSAM-Fusion-Crystallography-with-Rosetta/start_pymol_server.pml &
         sleep 2
     fi
 
@@ -91,8 +91,8 @@ else
         cmd=("${cmd_base[@]}" -l "$linker_variant")
     fi
     "${cmd[@]}"
-    #fasta="$HOME/TELSetta/${linker_variant}/${TELSAM_version}--${client}_${linker_variant}_${min_ab}_${min_d}.fasta"
-    #fastout="$HOME/TELSetta/${TELSAM_version}--${client}_${linker_variant}_${min_ab}_${min_d}_gene.fasta"
+    #fasta="$HOME/TELSAM-Fusion-Crystallography-with-Rosetta/${linker_variant}/${TELSAM_version}--${client}_${linker_variant}_${min_ab}_${min_d}.fasta"
+    #fastout="$HOME/TELSAM-Fusion-Crystallography-with-Rosetta/${TELSAM_version}--${client}_${linker_variant}_${min_ab}_${min_d}_gene.fasta"
     #echo "fasta:$fasta fastout:$fastout"
     #GeneDesigner2.exe "$fasta" "$fastout" "None"
 fi
