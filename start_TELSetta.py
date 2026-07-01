@@ -113,7 +113,7 @@ class TELSetta:
 			print(err)
 			sys.exit(1)
 
-		self.base = os.path.join(os.path.expanduser('~/TELSAM-Fusion-Crystallography-with-Rosetta'),str(self.linker_variant))
+		self.base = os.path.join(os.path.dirname(__file__),str(self.linker_variant))
 		os.makedirs(self.base,exist_ok=True)
 		self.pmm = PyMOLMover()
 		self.pmm.keep_history(True)
