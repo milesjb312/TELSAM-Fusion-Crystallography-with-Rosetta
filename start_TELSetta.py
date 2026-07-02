@@ -15,6 +15,9 @@ import pyrosetta
 from pyrosetta import *
 from pyrosetta.toolbox import cleanATOM
 from pyrosetta.toolbox.mutants import mutate_residue
+import pyrosetta.rosetta.core.io
+dir(pyrosetta.rosetta.core.io)
+
 from pyrosetta.rosetta.core.pose import append_subpose_to_pose
 from pyrosetta.rosetta.core.pose import append_pose_to_pose
 from pyrosetta.rosetta.core.pose import initialize_atomid_map
@@ -71,6 +74,7 @@ class TELSetta:
 		self.remake_TELSAM_bool = False
 		self.optimize = False
 		self.centroids = False
+		self.interfaced = False
 		self.scores = {}
 		self.headers = {
 			"User-Agent": (
@@ -125,11 +129,12 @@ class TELSetta:
 			print(err)
 			sys.exit(1)
 
-		self.base = os.path.join(os.path.expanduser('~/TELSetta'),str(self.linker_variant))
+		self.base = os.path.join(os.path.dirname(__file__),str(self.linker_variant))
 		os.makedirs(self.base,exist_ok=True)
 		self.pmm = PyMOLMover()
 		self.pmm.keep_history(True)
 		self.energies_vs_ucab_vs_deg = {'linker':[],'energy':[],'ucab':[],'deg':[]}
+		self.interfaced_energies_vs_ucab_vs_deg = {'linker':[],'energy':[],'ucab':[],'deg':[]}
 		self.furthest_x = 0
 		self.to_fullatom = SwitchResidueTypeSetMover("fa_standard")
 		self.setup_for_refinement()
@@ -165,8 +170,17 @@ class TELSetta:
 
 		#Shape Complementarity Filter
 		self.iam = InterfaceAnalyzerMover("A_B")
+		self.iam.set_scorefunction(self.sf)
 
-	def refine(self,pose):
+	def refine(self,pose) -> float:
+		"""Creates a movemap, freezing bb and chi angles, then unfreezing the atoms that are outside of the 1TEL module.
+		Then, changes self.min_mover to have the movemap that was just created.
+		Then, applies self.min_mover to the current pose.
+		Then, changes self.relax to have the previous movemap as well.
+		Then, initializes a TaskFactory that reinitializes from command line and restricts to repacking???
+		Then, changes self.relax by setting the previously made TaskFactory in it.
+		Then, applies self.relax to the passed pose.
+		Finally, returns the energy of the pose with self.sf(pose)"""
 		####################### MOVEMAP REFINEMENT (Must be re-setup after pose is symmetrized) #################
 		#It may be okay to just have it here and then call the min_mover.movemap and relax.set_movemap functions later.
 		movemap = MoveMap()
@@ -185,9 +199,21 @@ class TELSetta:
 		tf.push_back(RestrictToRepacking())
 		self.relax.set_task_factory(tf)
 		self.relax.apply(pose)
+		energy = self.sf(pose)
+		return energy
 		##############################################################################################
 
-	def interface_refine(self,pose):
+	def interface_refine(self,pose) -> float:
+		"""First, creates chain selectors for chains A and B.
+		Then, creates NeighborhoodResidueSelectors that accept the chain selectors as arguments...
+		Then, creates an OrResidueSelector that accepts both NeighborhoodResidueSelectors as arguments...
+		Then, actually generates a selection by applying the previous selector on the pose (this may be broken).
+		Creates a movemap_factory that disables movement of the bb and chi angles for all but the interface selector?
+		Creates a TaskFactory to restrict to repacking??? Why isn't this the default?
+		Changes self.relax by setting the movemap factory and task factory to it.
+		Finally, relaxes the passed pose.
+		Pushes to PyMOL.
+		Tries to run the InterfaceAnalyzerMover("A_B") and return interface dg. On a failure, instead runs normal refinement."""
 		#Create selectors to get chains
 		chainA_sel = ChainSelector("A")
 		chainB_sel = ChainSelector("B")
@@ -202,27 +228,22 @@ class TELSetta:
 		interfaceAB = interfaceAB_sel.apply(pose)
 		print("Interface-region residues:", [i+1 for i, inter in enumerate(interfaceAB) if inter])
 		#interfaceBC = interfaceBC_sel.apply(pose)
-		def relax_interface(interface_sel):
-			#Define residues that can move
-			movemap_factory = MoveMapFactory()
-			movemap_factory.add_bb_action(move_map_action.mm_disable, TrueResidueSelector())
-			movemap_factory.add_chi_action(move_map_action.mm_disable, TrueResidueSelector())
-			movemap_factory.add_bb_action(move_map_action.mm_enable, interface_sel)
-			movemap_factory.add_chi_action(move_map_action.mm_enable, interface_sel)
-	
-			#relax
-			#restrict residues that can move
-			tf = TaskFactory()
-			tf.push_back(RestrictToRepacking())
-			tf.push_back(OperateOnResidueSubset(RestrictToRepackingRLT(),interface_sel))
-			self.relax.set_movemap_factory(movemap_factory)
-			self.relax.set_task_factory(tf)
-			self.relax.apply(pose)
-			energy = self.sf(pose)
-			print(f'Energy of interface: {energy}')
-		relax_interface(interfaceAB_sel)
+		
+		#Define residues that can move
+		movemap_factory = MoveMapFactory()
+		movemap_factory.add_bb_action(move_map_action.mm_disable, TrueResidueSelector())
+		movemap_factory.add_chi_action(move_map_action.mm_disable, TrueResidueSelector())
+		movemap_factory.add_bb_action(move_map_action.mm_enable, interfaceAB_sel)
+		movemap_factory.add_chi_action(move_map_action.mm_enable, interfaceAB_sel)
 
-		print("num chains:", pose.num_chains())
+		#relax
+		#restrict residues that can move
+		tf = TaskFactory()
+		tf.push_back(RestrictToRepacking())
+		tf.push_back(OperateOnResidueSubset(RestrictToRepackingRLT(),interfaceAB))
+		self.relax.set_movemap_factory(movemap_factory)
+		self.relax.set_task_factory(tf)
+		self.relax.apply(pose)
 
 		pdbinfo = pose.pdb_info()
 		for c in range(1, pose.num_chains()+1):
@@ -232,8 +253,9 @@ class TELSetta:
 				pose.chain_end(c),
 				pdbinfo.chain(pose.chain_begin(c))
 			)
+		print(f'fold_tree: {pose.fold_tree()}')
+		pose.pdb_info().name("pmm")
 		self.pmm.apply(pose)
-
 		self.iam.apply(pose)
 		score = self.iam.get_interface_dG()
 		"""Use the following lines instead in case of three chains
@@ -249,6 +271,13 @@ class TELSetta:
 		#print(f'SASA: {self.iam.get_interface_delta_sasa()}')
 		#print(f'unsat H: {self.iam.get_interface_delta_hbond_unsat()}')
 		#print(f'Interface energy: {self.iam.get_crossterm_interface_energy()}')
+		if not score:
+			score = self.refine(pose)
+		else:
+			print(f'INTERFACE WORKED!')
+			if self.interfaced == False:
+				self.min_score = score
+			self.interfaced = True
 		return score
 
 	def get_CRYST1(self,pdb):
@@ -416,6 +445,8 @@ class TELSetta:
 		#Get Crystal Info:
 		cryst1 = self.get_CRYST1(pdb)
 		print(f'CRYST1: {cryst1}')
+		dir(symmop_pose.conformation())
+		dir(symmop_pose.pdb_info())
 		#Do translation:
 		for res_i in range(1,symmop_pose.total_residue()+1):
 			res = symmop_pose.residue(res_i)
@@ -424,14 +455,13 @@ class TELSetta:
 				abc = ((xyz[0]+xyz[1]*math.tan(math.radians(30)))/cryst1[0],xyz[1]/math.cos(math.radians(30))/cryst1[1],xyz[2]/cryst1[2])
 				if symmop == "6":
 					#symmop6:
-					#abc = (abc[1],-abc[0]+abc[1],(1/6)+abc[2])
-					pass
+					abc = (abc[1],-abc[0]+abc[1],(1/6)+abc[2])
 				elif symmop == "2":
 					#symmop2:
-					abc = (-abc[1],abc[0]-abc[1]-1,(2/3)+abc[2])
-				elif symmop == "4":
-					#symmop4:
-					abc = (-abc[0],-abc[1],1/2+abc[2])
+					abc = (-abc[1],abc[0]-abc[1],(2/3)+abc[2])
+				elif symmop == "4+a":
+					#symmop4+a:
+					abc = (-abc[0]+1,-abc[1],1/2+abc[2])
 				xyz = xyzVector_double_t((abc[0]-abc[1]*math.sin(math.radians(30)))*cryst1[0],abc[1]*cryst1[1]*math.cos(math.radians(30)),abc[2]*cryst1[2])
 				symmop_pose.set_xyz(AtomID(atom_i,res_i),xyz)
 		return symmop_pose
@@ -464,55 +494,93 @@ class TELSetta:
 		if pose=="P65":
 			pass
 
-	def refscilter(self,symm_pose,min_score,er_cutoff,min_score_pdb,current_pdb,last_pdb,scored_file_name):
+	def refscilter(self,symm_pose,er_cutoff,current_pdb,last_pdb,scored_file_name) -> bool:
 		"""self.refscilter refines and scores the symmetric pose, compares the score to the min_score*er_cutoff, and determines whether to update the min_score_pdb or not 
 		with the current PDB. It updates the scores_file with the final min_score_pdb of any given setting. Finally, it removes unneeded files.
 		It returns a tuple with the min_score,min_score_pdb,and a boolean reporting whether the current PDB exceeded the er_cutoff (True if exceeded).
 		"""
 		score = self.interface_refine(symm_pose)
+		"""
 		sequence = symm_pose.sequence()
 		with open (f'{current_pdb.removesuffix('.pdb')}.fasta', 'w') as f:
 			f.write(">"+current_pdb+", score (REU): "+"{:.3e}".format(score)+"\n"+"HHHHHHHHHH"+str(sequence).strip('X'))
 		self.add_CRYST1(os.path.basename(current_pdb),os.path.basename(current_pdb))
-
-		#score = self.sf(symm_pose)
-		#ft = symm_pose.fold_tree()
-		#print(ft.to_string())
-
-		print(f'minimum score and PDB: {min_score}, {min_score_pdb}, current score and PDB: {score}, {current_pdb}')
-		if min_score_pdb!=None:
-			with open(os.path.join(self.base,f'scores_file.txt'),'a') as scores:
-				scores.write(f'{scored_file_name}: {current_pdb}\n')
-				scores.write(f'Score: {score}\n')
-				specs = str(current_pdb).split("_")
-				for spec in range(len(specs)):
-					if str(os.path.join(self.base,f'{self.TELSAM_version}--{self.client_pdb}')) in specs[spec]:
-						if len(specs)==spec+4:
-							self.energies_vs_ucab_vs_deg['linker'].append(int(specs[spec+1]))
-							self.energies_vs_ucab_vs_deg["ucab"].append(int(specs[spec+2]))
-							self.energies_vs_ucab_vs_deg["deg"].append(int(specs[spec+3].removesuffix(".pdb")))
-							self.energies_vs_ucab_vs_deg['energy'].append(float(score))
-		symm_pose.pdb_info().name("pmm")
-		self.pmm.apply(symm_pose)
-		if 0<score<=min_score*er_cutoff or score<0:
-			if score<min_score:
-				#Add these lines back in if you no longer want to see all the previous minimum-scoring PDBs
-				#if min_score_pdb!=None:
-				#	os.remove(min_score_pdb)
-				min_score = score
-				min_score_pdb = current_pdb
-			if last_pdb!=None:
-				if os.path.exists(last_pdb) and last_pdb!= min_score_pdb:
-					os.remove(last_pdb)
-					print(f'removed previous pdb: {last_pdb}')
-			return (min_score,min_score_pdb,False)
+		"""
+		print(f'minimum score and PDB: {self.min_score}, {self.min_score_pdb}, current score and PDB: {score}, {current_pdb}')
+		if self.interfaced:
+			scores_file = os.path.join(self.base,f'interfaced_scores_file.txt')
+			if self.min_score_pdb!=None:
+				with open(scores_file,'a') as scores:
+					scores.write(f'{scored_file_name}: {current_pdb}\n')
+					scores.write(f'Score: {score}\n')
+					specs = str(current_pdb).split("_")
+					for spec in range(len(specs)):
+						if str(os.path.join(self.base,f'{self.TELSAM_version}--{self.client_pdb}')) in specs[spec]:
+							if len(specs)==spec+4:
+								self.interfaced_energies_vs_ucab_vs_deg['linker'].append(int(specs[spec+1]))
+								self.interfaced_energies_vs_ucab_vs_deg["ucab"].append(int(specs[spec+2]))
+								self.interfaced_energies_vs_ucab_vs_deg["deg"].append(int(specs[spec+3].removesuffix(".pdb")))
+								self.interfaced_energies_vs_ucab_vs_deg['energy'].append(float(score))
+			symm_pose.pdb_info().name("pmm")
+			self.pmm.apply(symm_pose)
+			if score<0 or 0<score<=abs(self.min_score)*er_cutoff:
+				if score<self.min_score:
+					#Add these lines back in if you no longer want to see all the previous minimum-scoring PDBs
+					#if self.min_score_pdb!=None:
+					#	os.remove(self.min_score_pdb)
+					self.min_score = score
+					self.min_score_pdb = current_pdb
+				if last_pdb!=None:
+					if os.path.exists(last_pdb) and last_pdb!= self.min_score_pdb:
+						os.remove(last_pdb)
+						print(f'removed previous pdb: {last_pdb}')
+				print(f'New minimum score and PDB: {self.min_score}, {self.min_score_pdb}')
+				return (False)
+			else:
+				if last_pdb!=None:
+					if os.path.exists(last_pdb) and last_pdb!= self.min_score_pdb:
+						os.remove(last_pdb)
+				#if os.path.exists(current_pdb) and current_pdb!=self.min_score_pdb:
+				#	os.remove(current_pdb)#This may cause issues...
+				print(f'New minimum score and PDB: {self.min_score}, {self.min_score_pdb}')
+				return (True)
 		else:
-			if last_pdb!=None:
-				if os.path.exists(last_pdb) and last_pdb!= min_score_pdb:
-					os.remove(last_pdb)
-			#if os.path.exists(current_pdb) and current_pdb!=min_score_pdb:
-			#	os.remove(current_pdb)#This may cause issues...
-			return (min_score,min_score_pdb,True)
+			scores_file = os.path.join(self.base,f'scores_file.txt')
+			if self.min_score_pdb!=None:
+				with open(scores_file,'a') as scores:
+					scores.write(f'{scored_file_name}: {current_pdb}\n')
+					scores.write(f'Score: {score}\n')
+					specs = str(current_pdb).split("_")
+					for spec in range(len(specs)):
+						if str(os.path.join(self.base,f'{self.TELSAM_version}--{self.client_pdb}')) in specs[spec]:
+							if len(specs)==spec+4:
+								self.energies_vs_ucab_vs_deg['linker'].append(int(specs[spec+1]))
+								self.energies_vs_ucab_vs_deg["ucab"].append(int(specs[spec+2]))
+								self.energies_vs_ucab_vs_deg["deg"].append(int(specs[spec+3].removesuffix(".pdb")))
+								self.energies_vs_ucab_vs_deg['energy'].append(float(score))
+			symm_pose.pdb_info().name("pmm")
+			self.pmm.apply(symm_pose)
+			if score<0 or 0<score<=abs(self.min_score)*er_cutoff:
+				if score<self.min_score:
+					#Add these lines back in if you no longer want to see all the previous minimum-scoring PDBs
+					#if self.min_score_pdb!=None:
+					#	os.remove(self.min_score_pdb)
+					self.min_score = score
+					self.min_score_pdb = current_pdb
+				if last_pdb!=None:
+					if os.path.exists(last_pdb) and last_pdb!= self.min_score_pdb:
+						os.remove(last_pdb)
+						print(f'removed previous pdb: {last_pdb}')
+				print(f'New minimum score and PDB: {self.min_score}, {self.min_score_pdb}')
+				return (False)
+			else:
+				if last_pdb!=None:
+					if os.path.exists(last_pdb) and last_pdb!= self.min_score_pdb:
+						os.remove(last_pdb)
+				#if os.path.exists(current_pdb) and current_pdb!=self.min_score_pdb:
+				#	os.remove(current_pdb)#This may cause issues...
+				print(f'New minimum score and PDB: {self.min_score}, {self.min_score_pdb}')
+				return (True)
 		
 	def chart(self,linker):
 		"""chart primarily makes a heat map of energies related to unit cell ab and degree of rotation for each linker length variant.
@@ -603,9 +671,10 @@ class TELSetta:
 			
 			#Align the two helices:
 			self.start_residue_to_superimpose = 3
-			file_path = os.path.join(self.base,f'scores_file.txt')
-			if os.path.exists(file_path):
-				os.remove(file_path)
+			if os.path.exists(os.path.join(self.base,f'scores_file.txt')):
+				os.remove(os.path.join(self.base,f'scores_file.txt'))
+			if os.path.exists(os.path.join(self.base,f'interfaced_scores_file.txt')):
+				os.remove(os.path.join(self.base,f'interfaced_scores_file.txt'))
 			self.TELSAM = self.TELSAM_in_9DOC.clone()
 			if self.linker_variant!=None:
 				self.start_residue_to_superimpose+=self.linker_variant
@@ -758,7 +827,7 @@ class TELSetta:
 				ucab_end = int(self.unit_cell_ab-30)
 			else:
 				ucab_start = int(self.furthest_x*2)
-				ucab_end = int(self.furthest_x-30)
+				ucab_end = int(self.furthest_x*2-30)
 			if self.degree_rotation!=None:
 				deg_start = self.degree_rotation
 				deg_end = self.degree_rotation+20
@@ -767,37 +836,39 @@ class TELSetta:
 				deg_end = 21
 		else:
 			ucab_start = int(self.furthest_x*2)
-			ucab_end = int(self.furthest_x-30)
+			ucab_end = int(self.furthest_x*2-30)
 			deg_start = 1
 			deg_end = 21
 
 		for ucab in range(ucab_start,ucab_end,-1):
 			current_ucab_pdb = os.path.join(self.base,f'{self.TELSAM_version}--{self.client_pdb}_{self.linker_variant}_{ucab}.pdb')
 			self.change_cell(self.current_linker_pdb,current_ucab_pdb,wa=ucab,wb=ucab)
-			symm_pose = self.generate_minimal_contact_symmetry_mates(current_ucab_pdb,("6","2"))
-			min_score,min_score_pdb,exceeded = self.refscilter(symm_pose,min_score,1.1,min_score_pdb,current_ucab_pdb,os.path.join(self.base,f'{self.TELSAM_version}--{self.client_pdb}_{self.linker_variant}_{ucab+1}.pdb'),'Unit Cell AB File')
+			symm_pose = self.generate_minimal_contact_symmetry_mates(current_ucab_pdb,("4+a",))
+			exceeded = self.refscilter(symm_pose,1.1,current_ucab_pdb,os.path.join(self.base,f'{self.TELSAM_version}--{self.client_pdb}_{self.linker_variant}_{ucab+1}.pdb'),'Unit Cell AB File')
 			if exceeded:
-				if min_score_pdb != None:
-					min_ucab_pdb = min_score_pdb
+				if self.min_score_pdb != None:
+					min_ucab_pdb = self.min_score_pdb
 					ucab1 = int(str(min_ucab_pdb).split("_")[-1].removesuffix(".pdb"))
 				break
+		min_ucab_pdb = self.min_score_pdb
+		ucab1 = int(str(min_ucab_pdb).split("_")[-1].removesuffix(".pdb"))
 		##################################### ROTATE UNIT CELL AND CONTINUE DOCKING! ###############################
 		if min_ucab_pdb!=None:
+			print(f'min_ucab_pdb: {min_ucab_pdb}')
 			ucab = ucab1
 			min_score = float('inf')
 			min_score_pdb = None
 			for deg in range(deg_start-1,deg_end):
-				current_deg_pdb = os.path.join(self.base,f'{min_ucab_pdb.removesuffix(".pdb")}_{deg}.pdb')
 				for ucab2 in range(ucab,ucab_end,-1):
 					current_ucab2_deg_pdb = os.path.join(self.base,f'{min_ucab_pdb.removesuffix(f"{ucab1}.pdb")}{ucab2}_{deg}.pdb')
 					self.change_cell(min_ucab_pdb,current_ucab2_deg_pdb,wa=ucab2,wb=ucab2)
 					self.rotate_file(current_ucab2_deg_pdb,deg)
-					symm_pose = self.generate_minimal_contact_symmetry_mates(current_ucab2_deg_pdb,("6","2"))
-					min_score,min_score_pdb,exceeded = self.refscilter(symm_pose,min_score,1.1,min_score_pdb,current_ucab2_deg_pdb,os.path.join(self.base,f'{min_ucab_pdb.removesuffix(f"{ucab1}.pdb")}_{ucab2+1}_{deg}.pdb'),'Temp Unit Cell AB2 Deg File')
+					symm_pose = self.generate_minimal_contact_symmetry_mates(current_ucab2_deg_pdb,("4+a",))
+					exceeded = self.refscilter(symm_pose,1.1,current_ucab2_deg_pdb,os.path.join(self.base,f'{min_ucab_pdb.removesuffix(f"{ucab1}.pdb")}_{ucab2+1}_{deg}.pdb'),'Temp Unit Cell AB2 Deg File')
 					if exceeded:
 						ucab = ucab2
 						break
-				min_score,min_score_pdb,exceeded = self.refscilter(symm_pose,min_score,3,min_score_pdb,current_ucab2_deg_pdb,None,'Unit Cell AB2 Deg File')
+				exceeded = self.refscilter(symm_pose,3,current_ucab2_deg_pdb,None,'Unit Cell AB2 Deg File')
 				#EITHER leave this alone (meaning you will always test all the degrees in the range) OR calculate the angle between the linker vector and
 				#the furthest edge of the linker, because that angle has to be the starter angle for whichever degree check is opposite
 				#that angle (since proceeding by just 1 degree in the opposing direction will cause the edge of the linker to continually bump and increase
@@ -807,37 +878,24 @@ class TELSetta:
 			min_score = float('inf')
 			min_score_pdb = None
 			for deg in range(-deg_start,-deg_end,-1):
-				current_deg_pdb = os.path.join(self.base,f'{min_ucab_pdb.removesuffix(".pdb")}_{deg}.pdb')
 				for ucab2 in range(ucab,ucab_end,-1):
 					current_ucab2_deg_pdb = os.path.join(self.base,f'{min_ucab_pdb.removesuffix(f"{ucab1}.pdb")}{ucab2}_{deg}.pdb')
 					self.change_cell(min_ucab_pdb,current_ucab2_deg_pdb,wa=ucab2,wb=ucab2)
 					self.rotate_file(current_ucab2_deg_pdb,deg)
-					symm_pose = self.generate_minimal_contact_symmetry_mates(current_ucab2_deg_pdb,("6","2"))
-					min_score,min_score_pdb,exceeded = self.refscilter(symm_pose,min_score,1.1,min_score_pdb,current_ucab2_deg_pdb,os.path.join(self.base,f'{min_ucab_pdb.removesuffix(f"{ucab1}.pdb")}_{ucab2+1}_{deg}.pdb'),'Temp Unit Cell AB2 Deg File')
+					symm_pose = self.generate_minimal_contact_symmetry_mates(current_ucab2_deg_pdb,("4+a",))
+					exceeded = self.refscilter(symm_pose,1.1,current_ucab2_deg_pdb,os.path.join(self.base,f'{min_ucab_pdb.removesuffix(f"{ucab1}.pdb")}_{ucab2+1}_{deg}.pdb'),'Temp Unit Cell AB2 Deg File')
 					if exceeded:
 						ucab = ucab2 #This assumes that client proteins are not too concave (pointing in toward the polymer vector)
 						break
-				min_score,min_score_pdb,exceeded = self.refscilter(symm_pose,min_score,3,min_score_pdb,current_ucab2_deg_pdb,None,'Unit Cell AB2 Deg File')
+				exceeded = self.refscilter(symm_pose,3,current_ucab2_deg_pdb,None,'Unit Cell AB2 Deg File')
 			
 			self.chart(self.linker_variant)
-
-		"""
-		##################################### CHANGE HELICAL RISE! #####################################
-		#Test different unit cell sizes:
-		min_score = 200000
-		for ucc in range(1,15):
-			self.change_cell(passing_pdb,os.path.join(self.base,f'{passing_pdb.removesuffix(".pdb")}_{ucc}.pdb'),wc=ucc)
-			symm_pose = self.generate_minimal_contact_symmetry_mates(passing_pdb,("6","2"))
-			min_score,passing_pdb,finished = self.refscilter(symm_pose,min_score,passing_pdb,min_ucab_pdb,os.path.join(self.base,f'{self.TELSAM_version}--{self.client_pdb}_{self.linker_variant}_{ucab+1}.pdb'),'Unit Cell C File')
-			if finished:
-				break
-		"""
 
 	def picker(self):
 		current_ucab_pdb = os.path.join(self.base,f'{self.TELSAM_version}--{self.client_pdb}_{self.linker_variant}_{str(int(float(self.unit_cell_ab)))}.pdb')
 		self.change_cell(self.current_linker_pdb,current_ucab_pdb,wa=self.unit_cell_ab,wb=self.unit_cell_ab)
 		self.rotate_file(current_ucab_pdb,self.degree_rotation)
-		symm_pose = self.generate_minimal_contact_symmetry_mates(current_ucab_pdb,("6","2"))
+		symm_pose = self.generate_minimal_contact_symmetry_mates(current_ucab_pdb,("4+a",))
 		sequence = symm_pose.sequence()
 		self.interface_refine(symm_pose)
 		score = self.sf(symm_pose)
