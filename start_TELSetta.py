@@ -58,7 +58,6 @@ from matplotlib import lines, pyplot as plt
 sys.argv[1:] = _custom_args
 
 #pyrosetta.init("-crystal_refine -cryst::refinable_lattice -score_symm_complex")
-pyrosetta.init()
 pyrosetta.init("-crystal_refine -cryst::refinable_lattice -score_symm_complex -out:level 300 -out:file:scorefile scores.sc")
 
 
@@ -264,7 +263,14 @@ class TELSetta:
 
 	def add_CRYST1(self,new_pdb,old_pdb):
 		with open (os.path.join(self.base,new_pdb),'r') as file:
-		
+			pdb_sans_cryst = file.read()
+		with open(os.path.join(self.base,new_pdb),'w') as file:
+			with open(os.path.join(self.base,old_pdb)) as s:
+				for line in s:
+					if "CRYST1" in line:
+						file.write(line)
+						break
+			file.write(pdb_sans_cryst)
 	def remake_TELSAM(self, TELSAM_Type="https://files.rcsb.org/download/9DOC.pdb"):
 		if os.path.exists(os.path.join(self.base,f'TELSAM_Construct.pdb')):
 			os.remove(os.path.join(self.base,f'TELSAM_Construct.pdb'))
@@ -339,8 +345,6 @@ class TELSetta:
 
 		with open (Construct_join,'r') as file:
 			pdb_sans_cryst = file.read()
-		with open(os.path.join(self.base,new_pdb),'w') as file:
-			with open(os.path.join(self.base,old_pdb)) as s:
 
 		STEL_join = os.path.join(self.base,f'STEL.pdb')
 		cryst_line = ""
@@ -355,7 +359,6 @@ class TELSetta:
 			if cryst_line:
 				file.write(cryst_line)
 			file.write(pdb_sans_cryst)
-		
 
 		if os.path.exists(STEL_join):
 			os.remove(STEL_join)
@@ -560,84 +563,6 @@ class TELSetta:
 		fig.savefig(os.path.join(self.base,f"Energies of AB_Degree Combinations for {self.TELSAM_version}--{self.client_pdb}_{linker}"))
 		plt.close(fig)
 		"""
-
-	def remake_TELSAM(self):
-		if os.path.exists(os.path.join(self.base,f'TELSAM_in_9DOC.pdb')):
-			os.remove(os.path.join(self.base,f'TELSAM_in_9DOC.pdb'))
-		#Get 2QAR from the pdb (it's our most convenient engineered TELSAM because of the long helical linker at the end.)
-		url = f"https://files.rcsb.org/download/2QAR.pdb"
-		pdb_text = requests.get(url,headers=self.headers).text
-		with open(os.path.join(self.base,"ETEL.pdb"),"w") as file:
-			file.write(pdb_text)
-		cleanATOM(os.path.join(self.base,"ETEL.pdb"))
-		os.remove(os.path.join(self.base,"ETEL.pdb"))
-
-		#Get 9DOC from the pdb (it has the proper space group that TELSAM usually fits into)
-		url = f"https://files.rcsb.org/download/9DOC.pdb"
-		pdb_text = requests.get(url,headers=self.headers).text
-		with open(os.path.join(self.base,"STEL.pdb"),"w") as file:
-			file.write(pdb_text)
-		cleanATOM(os.path.join(self.base,"STEL.pdb"))
-		#Don't remove the STEL.pdb yet because it has crystallographic information we want to get later.
-
-		################### MOVE 2QAR INTO 9DOC ASYMMETRIC UNIT ##############################
-		#Grab a portion of 2QAR
-		TELSAM_in_9DOC = Pose()
-		temp_pose = pose_from_pdb(os.path.join(self.base,'ETEL.clean.pdb'))
-		os.remove(os.path.join(self.base,"ETEL.clean.pdb"))
-		append_subpose_to_pose(TELSAM_in_9DOC,temp_pose,temp_pose.chain_begin(2),temp_pose.chain_end(2))
-		S_pose = pose_from_pdb(os.path.join(self.base,'STEL.clean.pdb'))
-		os.remove(os.path.join(self.base,"STEL.clean.pdb"))
-
-		#Superimpose CA atoms between 2QAR and 9DOC
-		S_residues_to_superimpose = range(S_pose.chain_begin(1),S_pose.chain_begin(1)+TELSAM_in_9DOC.total_residue())
-		E_residues_to_superimpose = range(TELSAM_in_9DOC.chain_begin(1),TELSAM_in_9DOC.chain_end(1))
-		atom_map = AtomID_Map()
-		initialize_atomid_map(atom_map, TELSAM_in_9DOC, AtomID())
-		for ER, SR in zip(E_residues_to_superimpose,S_residues_to_superimpose):
-			E_atom = AtomID(TELSAM_in_9DOC.residue(ER).atom_index("CA"), ER)
-			S_atom = AtomID(S_pose.residue(SR).atom_index("CA"), SR)
-			atom_map.set(E_atom,S_atom)
-		superimpose_pose(TELSAM_in_9DOC,S_pose,atom_map)
-		mutate_residue(TELSAM_in_9DOC,34,"R",5)
-		mutate_residue(TELSAM_in_9DOC,66,"E",5)
-		"""
-		####################################### EXTEND HELIX ###############################################
-		helix_extender = Pose()
-		#Grab the last 11 residues in TELSAM:
-		append_subpose_to_pose(helix_extender,TELSAM_in_9DOC,TELSAM_in_9DOC.chain_end(1)-10,TELSAM_in_9DOC.chain_end(1))
-		#Align those residues to the end of the helix over 4 amino acids (effectively copying the helix and shifting it over on top of itself)
-		T_residues_to_superimpose = range(TELSAM_in_9DOC.chain_end(1)-3,TELSAM_in_9DOC.chain_end(1)+1)
-		H_residues_to_superimpose = range(helix_extender.chain_begin(1),helix_extender.chain_begin(1)+4)
-		helix_atom_map = AtomID_Map()
-		initialize_atomid_map(helix_atom_map, helix_extender, AtomID())
-		for HR, TR in zip(H_residues_to_superimpose,T_residues_to_superimpose):
-			H_atom = AtomID(helix_extender.residue(HR).atom_index("CA"), HR)
-			T_atom = AtomID(TELSAM_in_9DOC.residue(TR).atom_index("CA"), TR)
-			helix_atom_map.set(H_atom,T_atom)
-		superimpose_pose(helix_extender,TELSAM_in_9DOC,helix_atom_map)
-
-		#Delete 4-aa overlap
-		delete_region(TELSAM_in_9DOC,TELSAM_in_9DOC.chain_end(1)-3,TELSAM_in_9DOC.chain_end(1))
-		#Fuse
-		append_pose_to_pose(TELSAM_in_9DOC,helix_extender,new_chain=False)
-		TELSAM_in_9DOC.conformation().declare_chemical_bond(TELSAM_in_9DOC.chain_end(1)-helix_extender.total_residue(),"C",TELSAM_in_9DOC.chain_end(1)-helix_extender.total_residue()+1,"N")
-		"""
-
-		TELSAM_in_9DOC.dump_pdb(os.path.join(self.base,f'TELSAM_in_9DOC.pdb'))
-		last_size = -1
-		while True:
-			if os.path.exists(os.path.join(self.base,f'TELSAM_in_9DOC.pdb')):
-				size = os.path.getsize(os.path.join(self.base,f'TELSAM_in_9DOC.pdb'))
-				if size == last_size:
-					break
-				last_size = size
-			time.sleep(0.01)
-		self.add_CRYST1(f'TELSAM_in_9DOC.pdb',f'STEL.pdb')
-		if os.path.exists(os.path.join(self.base,"STEL.pdb")):
-			os.remove(os.path.join(self.base,"STEL.pdb"))
-		print(f'Remade TELSAM. Stored in: {self.base}')
-
 	def validate_TELSAM(self):
 		if self.remake_TELSAM_bool:
 			self.remake_TELSAM(TELSAM_Type = self.TELSAM_url)
@@ -651,7 +576,6 @@ class TELSetta:
 		else:
 			self.remake_TELSAM(TELSAM_Type = self.TELSAM_url)
 			self.TELSAM_in_9DOC = pose_from_file(os.path.join(self.base,'TELSAM_Construct.pdb'))
-
 	def fuse(self):
 		########################## CREATE TELSAM FUSION! ######################################
 		try:
@@ -732,7 +656,7 @@ class TELSetta:
 			#Save so you can extract the furthest_x coordinate and refine correctly
 			self.current_linker_pdb = os.path.join(self.base,f'{self.TELSAM_version}--{self.client_pdb}_{self.linker_variant}.pdb')
 			self.TELSAM.dump_pdb(self.current_linker_pdb)
-			self.add_CRYST1(os.path.basename(self.current_linker_pdb),os.path.basename("TELSAM_in_9DOC.pdb"))
+			self.add_CRYST1(os.path.basename(self.current_linker_pdb),os.path.basename("TELSAM_Construct.pdb"))
 			with open(self.current_linker_pdb, 'r') as file:
 				lines = iter(file)
 				for line in lines:

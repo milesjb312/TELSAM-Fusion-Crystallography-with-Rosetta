@@ -1,2 +1,5 @@
-cd /home/benne77/miniconda3/lib/python3.13/site-packages/pyrosetta
-run PyMOLRosettaServer.py
+python
+import pyrosetta, os
+server_path = os.path.join(os.path.dirname(pyrosetta.__file__), "PyMOLRosettaServer.py")
+cmd.do(f'run {server_path}')
+python end
