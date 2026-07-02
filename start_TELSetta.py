@@ -849,6 +849,61 @@ class TELSetta:
 		self.pmm.apply(symm_pose)
 		self.chart(self.linker_variant)
 
+	def find_best_uc_and_rotation(self):
+		"""Currently sampling the unit cell and rotation at the same time, might be better to hold one constant while sampling the other"""
+		threshold = 50
+		lowest_score = float('inf')
+		best_uc = 0
+		best_rot = 0
+		
+		for i in range(threshold):
+			current_ucab_pdb = os.path.join(self.base, f"attempt_iter_{i}.pdb")
+			random_uc = random.randint(25, 100)
+			random_rot = random.randint(0, 360)
+			self.change_cell(self.current_linker_pdb, current_ucab_pdb, wa=random_uc, wb=random_uc)
+			self.rotate_file(current_ucab_pdb, random_rot)
+			symm_pose = self.generate_minimal_contact_symmetry_mates(current_ucab_pdb, ("6", "2"))
+			# breaking in interface refine when an InterfaceAnalyzerMover is applied. Something could be hardcoded in Interface refine that is causing this.
+			self.interface_refine(symm_pose)
+			score = self.sf(symm_pose)
+			if score < lowest_score:
+				lowest_score = score
+				best_uc = random_uc
+				best_rot = random_rot
+		best_pose = None
+		best_sequence = None
+		best_pdb_path = None
+		print(f"done with the first loop")
+		for i in range(threshold):
+			current_ucab_pdb = os.path.join(self.base, f"refine_iter_{i}.pdb")
+			random_uc = random.uniform(best_uc - 5, best_uc + 5)
+			random_rot = random.uniform(best_rot - 5, best_rot + 5)
+			print(f"iter {i}cc2", flush=True)
+			self.change_cell(self.current_linker_pdb, current_ucab_pdb, wa=random_uc, wb=random_uc)
+			print(f"iter {i}rf2", flush=True)
+			self.rotate_file(current_ucab_pdb, random_rot)
+			print(f"iter {i}gmcsm2", flush=True)
+			symm_pose = self.generate_minimal_contact_symmetry_mates(current_ucab_pdb, ("6", "2"))
+			sequence = symm_pose.sequence()
+			print(f"iter {i}if2", flush=True)
+			self.interface_refine(symm_pose)
+			print(f"iter {i}if2 done", flush=True)
+			score = self.sf(symm_pose)
+			if score < lowest_score:
+				lowest_score = score
+				best_uc = random_uc
+				best_rot = random_rot
+				best_pose = symm_pose
+				best_sequence = sequence
+				best_pdb_path = current_ucab_pdb
+			
+		with open (f'{best_pdb_path.removesuffix('.pdb')}.fasta', 'w') as f:
+			f.write(">"+best_pdb_path+", score (REU): "+"{:.3e}".format(lowest_score)+"\n"+"HHHHHHHHHH"+str(best_sequence).strip('X'))
+			self.add_CRYST1(os.path.basename(best_pdb_path),os.path.basename(best_pdb_path))
+			symm_pose.pdb_info().name("pmm")
+			self.pmm.apply(best_pose)
+			self.chart(self.linker_variant)
+
 def main():
 	TELSetta1 = TELSetta()
 	if TELSetta1.TELSAM_version=="1TEL" and TELSetta1.client_pdb!=None:
