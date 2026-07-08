@@ -59,6 +59,17 @@ from matplotlib import pyplot as plt
 pyrosetta.init("-crystal_refine")
 
 class TELSetta:
+	"""Using PyRosetta, creates a 1TEL fusion to a target protein to create a TFC (TELSAM Fusion Construct), docks the TFC against itself at several degrees and 
+	distances, scores each docking attempt, and returns a list of scores with their associated settings.\n
+	Accepts as arguments (-flag "arg"):\n
+	-t "TELSAM_version" (not yet implemented; only accepts "1TEL" or nothing)\n
+	-c "client_pdb" (PDB id to fetch or path to a PDB file)\n
+	-l "linker_variant" (number of amino acids to place in the rigid helical fusion between 1TEL and the client)\n
+	-u "unit_cell_ab" (unit cell size in which to place the TFCs to be docked. Optional; mainly used if you're trying to reproduce a precise docking.)\n
+	-d "degree_rotation" (the degree of rotation offset by which to turn the TFCs about the C axis in the crystal's default unit cell)\n
+	-r "remake_TELSAM" (bool indicating whether the 1TEL subunit should be remade or reused from a previous session.
+	Will be deprecated in favor of recreating the 1TEL subunit every time.)\n
+	-o "optimize" (bool indicating whether a precise set of inputs including linker_variant and unit_cell_ab should be further refined.)"""
 	def __init__(self):
 		self.TELSAM_version = "1TEL"
 		self.client_pdb = None
@@ -125,6 +136,15 @@ class TELSetta:
 		self.validate_TELSAM()
 
 	def setup_for_refinement(self):
+		"""Assigns self.sf as get_score_function()\n
+		Assigns self.relax as FastRelax()\n
+		Changes FastRelax settings by running self.relax.set_scorefxn(self.sf)\n
+		Creates a task factory and reinitializes from command line and restricts to repacking???\n
+		Assigns self.packer as PackRotamersMover(self.sf)
+		Changes PackRotamersMover settings by applying the previously-made task factory???\n
+		Assigns self.min_mover as MinMover(), applies the score_function to its settings and applies the "lbfgs_armijo_nonmonotone" setting as its min_type.\n
+		Assigns self.iam as InterfaceAnalyzerMover("A_B"), and sets its scorefunction to self.sf.
+		"""
 		#################### SETUP FOR REFINEMENT ##########################
 		self.sf = get_score_function()
 		#self.sf = ScoreFunctionFactory.create_score_function("beta_nov16_cart")
@@ -157,22 +177,26 @@ class TELSetta:
 		self.iam.set_scorefunction(self.sf)
 
 	def refine(self,pose) -> float:
-		"""Creates a movemap, freezing bb and chi angles, then unfreezing the atoms that are outside of the 1TEL module.
-		Then, changes self.min_mover to have the movemap that was just created.
-		Then, applies self.min_mover to the current pose.
-		Then, changes self.relax to have the previous movemap as well.
-		Then, initializes a TaskFactory that reinitializes from command line and restricts to repacking???
-		Then, changes self.relax by setting the previously made TaskFactory in it.
-		Then, applies self.relax to the passed pose.
-		Finally, returns the energy of the pose with self.sf(pose)"""
+		"""Creates a movemap, freezing bb and chi angles, then unfreezing the atoms that are outside of the 1TEL module.\n
+		Then, changes self.min_mover to have the movemap that was just created.\n
+		Then, applies self.min_mover to the current pose.\n
+		Then, changes self.relax to have the previous movemap as well.\n
+		Then, initializes a TaskFactory that reinitializes from command line and restricts to repacking???\n
+		Then, changes self.relax by setting the previously made TaskFactory in it.\n
+		Then, applies self.relax to the passed pose.\n
+		Finally, returns the energy of the pose from self.sf(pose)"""
 		####################### MOVEMAP REFINEMENT (Must be re-setup after pose is symmetrized) #################
 		#It may be okay to just have it here and then call the min_mover.movemap and relax.set_movemap functions later.
 		movemap = MoveMap()
 		movemap.set_bb(False)
 		movemap.set_chi(False)
-		for i in range(self.TELSAM.chain_end(1)-self.client.total_residue()-self.start_residue_to_superimpose,self.TELSAM.chain_end(1)):
-			movemap.set_bb(i, True)
-			movemap.set_chi(i, True)
+		#The following line specifies the entirety of the client protein as well as the residues that were connected to the client's first alpha helix
+		#for every chain. Later, this information is passed into the min_mover as the list of residues that are allowed to move and in what ways they can move.
+		#Theoretically, the 1TEL subunit itself should not change much.
+		for chain in range(1,pose.num_chains()+1):
+			for i in range(self.TELSAM.chain_end(chain)-self.client.total_residue()-self.start_residue_to_superimpose,self.TELSAM.chain_end(chain)):
+				movemap.set_bb(i, True)
+				movemap.set_chi(i, True)
 		#Refine gently
 		self.min_mover.movemap(movemap)
 		#self.packer.apply(pose)
@@ -188,16 +212,20 @@ class TELSetta:
 		##############################################################################################
 
 	def interface_refine(self,pose) -> float:
-		"""First, creates chain selectors for chains A and B.
-		Then, creates NeighborhoodResidueSelectors that accept the chain selectors as arguments...
-		Then, creates an OrResidueSelector that accepts both NeighborhoodResidueSelectors as arguments...
-		Then, actually generates a selection by applying the previous selector on the pose (this may be broken).
-		Creates a movemap_factory that disables movement of the bb and chi angles for all but the interface selector?
-		Creates a TaskFactory to restrict to repacking??? Why isn't this the default?
-		Changes self.relax by setting the movemap factory and task factory to it.
-		Finally, relaxes the passed pose.
-		Pushes to PyMOL.
-		Tries to run the InterfaceAnalyzerMover("A_B") and return interface dg. On a failure, instead runs normal refinement."""
+		"""First, creates chain selectors for chains A and B.\n
+		Then, creates NeighborhoodResidueSelectors that accept the chain selectors as arguments...\n
+		Then, creates an OrResidueSelector that accepts both NeighborhoodResidueSelectors as arguments...\n
+		Then, actually generates a selection by applying the previous selector on the pose (this may be broken).\n
+		Creates a movemap_factory that disables movement of the bb and chi angles for all but the interface selector?\n
+		Creates a TaskFactory to restrict to repacking??? Why isn't this the default?\n
+		Changes self.relax by setting the movemap factory and task factory to it.\n
+		Relaxes the passed pose.\n
+		Pushes to PyMOL.\n
+		Tries to run the InterfaceAnalyzerMover("A_B") and return interface dg. On a failure, instead runs normal 
+		refinement and returns the program to non-interfaced mode. Whenever the program switches from non-interfaced 
+		mode to interfaced mode, a new local_min_score is saved.\n
+		In the future, the migration between non-interfaced and interfaced modes may be a good indicator that we
+		should switch into a higher-granularity docking simulation."""
 		#Create selectors to get chains
 		chainA_sel = ChainSelector("A")
 		chainB_sel = ChainSelector("B")
@@ -257,14 +285,16 @@ class TELSetta:
 		#print(f'Interface energy: {self.iam.get_crossterm_interface_energy()}')
 		if not score:
 			score = self.refine(pose)
+			self.interfaced = False
 		else:
 			print(f'INTERFACE WORKED!')
 			if self.interfaced == False:
-				self.min_score = score
+				self.local_min_score = score
 			self.interfaced = True
 		return score
 
 	def get_CRYST1(self,pdb):
+		"""Accepts a PDB file and returns the CRYST1 line from that file as a tuple with (a,b,c,alpha,beta,gamma)."""
 		with open(pdb, 'r') as s:
 				for line in s:
 					if "CRYST1" in line:
@@ -275,6 +305,7 @@ class TELSetta:
 						return (a, b, c, alpha, beta, gamma)
 
 	def add_CRYST1(self,new_pdb,old_pdb):
+		"""Copies CRYST1 data from the old_pdb into the new_pdb."""
 		with open (os.path.join(self.base,new_pdb),'r') as file:
 			pdb_sans_cryst = file.read()
 		with open(os.path.join(self.base,new_pdb),'w') as file:
@@ -285,7 +316,9 @@ class TELSetta:
 						break
 			file.write(pdb_sans_cryst)
 		
-	def change_cell(self,read_file,write_file,wa=None,wb=None,wdc=None):
+	def change_cell(self,read_file,write_file,wa=None,wb=None,wc=None):
+		"""Copies the read_file PDB into a new write_file PDB at the given path, supplying it with an altered CRYST1 line as the user
+		specifies. wa becomes the new a, wb becomes the new b, wc becomes the new c. The rest of the PDB remains unchanged."""
 		with open(write_file, 'w') as file:
 			with open(read_file, 'r') as s:
 				for line in s:
@@ -297,8 +330,8 @@ class TELSetta:
 							a = wa
 						if wb!=None:
 							b = wb
-						if wdc!=None:
-							c += wdc
+						if wc!=None:
+							c = wc
 						alpha, beta, gamma = [float(x) for x in cryst1_vals[3:6]]
 						spacegroup = line[55:66].strip()
 						z_value = line[66:].strip()
@@ -314,8 +347,10 @@ class TELSetta:
 						file.write(line)
 
 	#Currently, this only works in space group P65, but that's not a problem for this code.
-	def rotate_file(self,file,deg):
-		deg_pose = pose_from_file(file)
+	def rotate_file(self,old_file,rotated_file,deg):
+		"""Creates a rotated_file PDB from the old_file PDB after rotating it using apply_transform_Rx_plus_v.\n
+		Returns the rotated pose."""
+		deg_pose = pose_from_file(old_file)
 		theta = math.radians(deg)
 		R = xyzMatrix_double_t()
 		R.xx = math.cos(theta)
@@ -329,17 +364,20 @@ class TELSetta:
 		R.zz = 1.0
 		v = xyzVector_double_t(0.0, 0.0, 0.0) #No translation
 		deg_pose.apply_transform_Rx_plus_v(R, v)
-		deg_pose.dump_pdb(file)
+		deg_pose.dump_pdb(rotated_file)
 		return deg_pose
 	
 	def space_group_symmop_pose_from_pdb(self,pdb,symmop:str):
-		"""Performs a symmetry operator on the entire pose, returning a symmop_copy clone of the original pose in the new location."""
+		"""Performs a specified symmetry operator (symmop) on the entire pose, returning a symmop_pose clone of the original pose in the new location.\n
+		First, creates a pose from the passed pdb.\n
+		Then, gets the CRYST1 information, then performs a symmetry operation on the raw xyz locations of every atom in the pose using the CRYST1 information.\n
+		"""
 		symmop_pose = pose_from_file(pdb)
 		#Get Crystal Info:
 		cryst1 = self.get_CRYST1(pdb)
-		print(f'CRYST1: {cryst1}')
-		dir(symmop_pose.conformation())
-		dir(symmop_pose.pdb_info())
+		#print(f'CRYST1: {cryst1}')
+		#dir(symmop_pose.conformation())
+		#dir(symmop_pose.pdb_info())
 		#Do translation:
 		for res_i in range(1,symmop_pose.total_residue()+1):
 			res = symmop_pose.residue(res_i)
@@ -360,8 +398,10 @@ class TELSetta:
 		return symmop_pose
 
 	def generate_minimal_contact_symmetry_mates(self,pdb,symmops):
-		"""Hopefully this function will create rotated and translated copies of a provided monomer such that all lattice contacts are being represented 
-		once. This will allow downstream scoring functions to determine the lattice strength."""
+		"""Eventually, this function will access space_group_symmop_pose_from_pdb to create rotated and translated copies of a provided monomer such that all 
+		lattice contacts are being represented once, allowing refscilter to accurately score and optimize docked TFCs. For now, it simply calls on
+		generate_minimal_contact_symmetry_mates to create one chain per specified symmetry operation, then appends all the chains to one pose and returns
+		that combined pose, which is ready to be relaxed and analyzed by the InterfaceAnalyzerMover."""
 		#In the instance of the P65 space group, I'm interested in just two of the symmetry mates: the monomer directly above the root (n+1, or in 
 		#symmetry lingo, translate the unit cell across one a axis, then perform the sixth symmetry operation, (y,-x+y,1/6+x)) and the 
 		#monomer that's across from the root, in the next polymer over (in symmetry lingo, the second symmetry operation from the root chain).
@@ -388,9 +428,34 @@ class TELSetta:
 			pass
 
 	def refscilter(self,symm_pose,er_cutoff,current_pdb,last_pdb,scored_file_name) -> bool:
-		"""self.refscilter refines and scores the symmetric pose, compares the score to the min_score*er_cutoff, and determines whether to update the min_score_pdb or not 
-		with the current PDB. It updates the scores_file with the final min_score_pdb of any given setting. Finally, it removes unneeded files.
-		It returns a tuple with the min_score,min_score_pdb,and a boolean reporting whether the current PDB exceeded the er_cutoff (True if exceeded).
+		"""OVERVIEW: self.refscilter refines and scores the symmetric pose and compares the score to the min_score*er_cutoff, 
+		then determines whether to update the min_score_pdb or not with the current PDB.\n
+		It updates the scores_file with the final min_score_pdb of any given setting.\n
+		It removes unneeded files (such as the previous min_score_pdb, as it is no longer the min_score_pdb, and is probably not of interest?).\n
+		It returns a boolean reporting whether the current PDB exceeded the er_cutoff (True if exceeded). The intent is that TELSetta will then
+		respond appropriately, either by grabbing the previously-set min_score_pdb to further refine it, or ending the program and returning the final
+		best-scoring PDB file.\n
+		STEP-BY-STEP:\n
+		score is set to self.interface_refine(symm_pose). Note that if the interface_refinement fails, a non-interfaced refinement will automatically follow.
+		BRANCH: The rest of this function is split into a branch that deals with interfaced poses and a branch that deals with non-interfaced poses. Essentially,
+		they write their scores to different score files and compare to different minimum scores, since interfaced and non-interfaced poses have vastly different
+		scoring behaviors (interfaced poses have small scores, whether negative or positive, while non-interfaced poses usually have large scores, whether
+		negative or positive).\n
+		if the local_min_score_pdb has not been assigned, append a note about which current_pdb is being assessed into the scores file, along with its score,
+		then also add information about that pdb's specific settings (linker, unit cell size, degree of rotation and score) to an internal Python list so that 
+		a figure may be made later on.\n
+		Push the pose to PyMOL.
+		If the score is negative or positive but less than the absolute value of the current minimum score*the specified er_cutoff, and if the last PDB was not
+		the minimum-scoring one, delete the last PDB.\n
+		If the score is less than the previous one, reassign the local_min_score and the local_min_score_pdb to the current score and pdb.\n
+		If the score is more positive than the cutoff value previously specified, then return TRUE (as in, yes, the current PDB exceeds the cutoff)
+		Otherwise, return FALSE (as in, no, the current PDB is still potentially within the same energy well as the previous local_min_score_pdb).\n
+		NOTE: this algorithm assumes AT LEAST three things:\n
+		1) that we are testing unit cell size and chain positioning with sufficient range and granularity to identify all energy wells within the landscape (critical)\n
+		2) that the global minimum is contiguous with at least one of the local minima (haha, if not, that would be crazy)\n
+		3) that the height (above 0) of any given energy well (from an interfaced pose or not) is as great as its depth (below 0), which is likely not true,
+		but I have no idea how I would actually determine a fair cutoff, so I've given the filtering algorithm a lot of leeway. Essentially, that just means that
+		we test far more poses than should be necessary to identify a likely global minimum.
 		"""
 		score = self.interface_refine(symm_pose)
 		"""
@@ -399,10 +464,10 @@ class TELSetta:
 			f.write(">"+current_pdb+", score (REU): "+"{:.3e}".format(score)+"\n"+"HHHHHHHHHH"+str(sequence).strip('X'))
 		self.add_CRYST1(os.path.basename(current_pdb),os.path.basename(current_pdb))
 		"""
-		print(f'minimum score and PDB: {self.min_score}, {self.min_score_pdb}, current score and PDB: {score}, {current_pdb}')
+		print(f'minimum score and PDB: {self.local_min_score}, {self.local_min_score_pdb}, current score and PDB: {score}, {current_pdb}')
 		if self.interfaced:
 			scores_file = os.path.join(self.base,f'interfaced_scores_file.txt')
-			if self.min_score_pdb!=None:
+			if self.local_min_score_pdb!=None:
 				with open(scores_file,'a') as scores:
 					scores.write(f'{scored_file_name}: {current_pdb}\n')
 					scores.write(f'Score: {score}\n')
@@ -416,30 +481,30 @@ class TELSetta:
 								self.interfaced_energies_vs_ucab_vs_deg['energy'].append(float(score))
 			symm_pose.pdb_info().name("pmm")
 			self.pmm.apply(symm_pose)
-			if score<0 or 0<score<=abs(self.min_score)*er_cutoff:
-				if score<self.min_score:
+			if score<0 or 0<score<=abs(self.local_min_score)*er_cutoff:
+				if score<self.local_min_score:
 					#Add these lines back in if you no longer want to see all the previous minimum-scoring PDBs
-					#if self.min_score_pdb!=None:
-					#	os.remove(self.min_score_pdb)
-					self.min_score = score
-					self.min_score_pdb = current_pdb
+					#if self.local_min_score_pdb!=None:
+					#	os.remove(self.local_min_score_pdb)
+					self.local_min_score = score
+					self.local_min_score_pdb = current_pdb
 				if last_pdb!=None:
-					if os.path.exists(last_pdb) and last_pdb!= self.min_score_pdb:
+					if os.path.exists(last_pdb) and last_pdb!= self.local_min_score_pdb:
 						os.remove(last_pdb)
 						print(f'removed previous pdb: {last_pdb}')
-				print(f'New minimum score and PDB: {self.min_score}, {self.min_score_pdb}')
+				print(f'New minimum score and PDB: {self.local_min_score}, {self.local_min_score_pdb}')
 				return (False)
 			else:
 				if last_pdb!=None:
-					if os.path.exists(last_pdb) and last_pdb!= self.min_score_pdb:
+					if os.path.exists(last_pdb) and last_pdb!= self.local_min_score_pdb:
 						os.remove(last_pdb)
-				#if os.path.exists(current_pdb) and current_pdb!=self.min_score_pdb:
+				#if os.path.exists(current_pdb) and current_pdb!=self.local_min_score_pdb:
 				#	os.remove(current_pdb)#This may cause issues...
-				print(f'New minimum score and PDB: {self.min_score}, {self.min_score_pdb}')
+				print(f'New minimum score and PDB: {self.local_min_score}, {self.local_min_score_pdb}')
 				return (True)
 		else:
 			scores_file = os.path.join(self.base,f'scores_file.txt')
-			if self.min_score_pdb!=None:
+			if self.local_min_score_pdb!=None:
 				with open(scores_file,'a') as scores:
 					scores.write(f'{scored_file_name}: {current_pdb}\n')
 					scores.write(f'Score: {score}\n')
@@ -453,31 +518,33 @@ class TELSetta:
 								self.energies_vs_ucab_vs_deg['energy'].append(float(score))
 			symm_pose.pdb_info().name("pmm")
 			self.pmm.apply(symm_pose)
-			if score<0 or 0<score<=abs(self.min_score)*er_cutoff:
-				if score<self.min_score:
+			if score<0 or 0<score<=abs(self.local_min_score)*er_cutoff:
+				if score<self.local_min_score:
 					#Add these lines back in if you no longer want to see all the previous minimum-scoring PDBs
-					#if self.min_score_pdb!=None:
-					#	os.remove(self.min_score_pdb)
-					self.min_score = score
-					self.min_score_pdb = current_pdb
+					#if self.local_min_score_pdb!=None:
+					#	os.remove(self.local_min_score_pdb)
+					self.local_min_score = score
+					self.local_min_score_pdb = current_pdb
 				if last_pdb!=None:
-					if os.path.exists(last_pdb) and last_pdb!= self.min_score_pdb:
+					if os.path.exists(last_pdb) and last_pdb!= self.local_min_score_pdb:
 						os.remove(last_pdb)
 						print(f'removed previous pdb: {last_pdb}')
-				print(f'New minimum score and PDB: {self.min_score}, {self.min_score_pdb}')
+				print(f'New minimum score and PDB: {self.local_min_score}, {self.local_min_score_pdb}')
 				return (False)
 			else:
 				if last_pdb!=None:
-					if os.path.exists(last_pdb) and last_pdb!= self.min_score_pdb:
+					if os.path.exists(last_pdb) and last_pdb!= self.local_min_score_pdb:
 						os.remove(last_pdb)
-				#if os.path.exists(current_pdb) and current_pdb!=self.min_score_pdb:
+				#if os.path.exists(current_pdb) and current_pdb!=self.local_min_score_pdb:
 				#	os.remove(current_pdb)#This may cause issues...
-				print(f'New minimum score and PDB: {self.min_score}, {self.min_score_pdb}')
+				print(f'New minimum score and PDB: {self.local_min_score}, {self.local_min_score_pdb}')
 				return (True)
 		
-	def chart(self,linker):
-		"""chart primarily makes a heat map of energies related to unit cell ab and degree of rotation for each linker length variant.
-		chart can also be used to make a 3d graph of the relationship between energy, unit cell ab, and degree for each linker length variant.
+	def chart(self,linker:int):
+		"""Primarily makes a heat map of energies related to unit cell ab and degree of rotation for each linker length variant.\n
+		Can also be used to make a 3d graph of the relationship between energy, unit cell ab, and degree for each linker length variant.\n
+		The information this function pulls from is owned by TELSetta and populated by TELSetta.refscilter.\n
+		Relies heavily on matplotlib.
 		"""
 		fig = plt.figure()
 		data = {
@@ -726,8 +793,8 @@ class TELSetta:
 	def stepper(self):
 		######################################## DOCK POLYMERS! ######################################
 		#Test different unit cell sizes:
-		self.min_score = 200000
-		self.min_score_pdb = None
+		self.local_min_score = 200000
+		self.local_min_score_pdb = None
 		min_ucab_pdb = None
 		ucab_start = None
 		ucab_end = None
@@ -757,19 +824,19 @@ class TELSetta:
 			symm_pose = self.generate_minimal_contact_symmetry_mates(current_ucab_pdb,("4+a",))
 			exceeded = self.refscilter(symm_pose,1.1,current_ucab_pdb,os.path.join(self.base,f'{self.TELSAM_version}--{self.client_pdb}_{self.linker_variant}_{ucab+1}.pdb'),'Unit Cell AB File')
 			if exceeded:
-				if self.min_score_pdb != None:
-					min_ucab_pdb = self.min_score_pdb
+				if self.local_min_score_pdb != None:
+					min_ucab_pdb = self.local_min_score_pdb
 					ucab1 = int(str(min_ucab_pdb).split("_")[-1].removesuffix(".pdb"))
 				break
-		min_ucab_pdb = self.min_score_pdb
+		min_ucab_pdb = self.local_min_score_pdb
 		ucab1 = int(str(min_ucab_pdb).split("_")[-1].removesuffix(".pdb"))
 		##################################### ROTATE UNIT CELL AND CONTINUE DOCKING! ###############################
 		if min_ucab_pdb!=None:
 			print(f'min_ucab_pdb: {min_ucab_pdb}')
 			ucab = ucab1
 			self.interfaced = False
-			self.min_score = 200000
-			self.min_score_pdb = None
+			self.local_min_score = 200000
+			self.local_min_score_pdb = None
 			for deg in range(deg_start-1,deg_end):
 				for ucab2 in range(ucab,ucab_end,-1):
 					current_ucab2_deg_pdb = os.path.join(self.base,f'{min_ucab_pdb.removesuffix(f"{ucab1}.pdb")}{ucab2}_{deg}.pdb')
@@ -788,8 +855,8 @@ class TELSetta:
 
 			ucab = ucab1
 			self.interfaced = False
-			self.min_score = 200000
-			self.min_score_pdb = None
+			self.local_min_score = 200000
+			self.local_min_score_pdb = None
 			for deg in range(-deg_start,-deg_end,-1):
 				for ucab2 in range(ucab,ucab_end,-1):
 					current_ucab2_deg_pdb = os.path.join(self.base,f'{min_ucab_pdb.removesuffix(f"{ucab1}.pdb")}{ucab2}_{deg}.pdb')
