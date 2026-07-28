@@ -8,18 +8,20 @@ linker_variant=""
 degree_rotation=""
 remake_TELSAM="false"
 optimize_TELSAM="false"
+exhaustive="false"
 
-while getopts "p:t:c:l:u:d:r:o" flag
+while getopts "pt:c:l:u:d:r:oe" flag
 do
     case "${flag}" in
-        p) pymol_setting="${OPTARG}";;
+        p) pymol_setting="false";;
         t) TELSAM_version="${OPTARG}";;
         c) client="${OPTARG}";;
         l) linker_variant="${OPTARG}";;
         u) unit_cell_ab="${OPTARG}";;
         d) degree_rotation="${OPTARG}";;
         r) remake_TELSAM="${OPTARG}";;
-        o) optimize_TELSAM="false";;
+        o) optimize_TELSAM="true";;
+        e) exhaustive="true";;
         \?) echo "Invalid option: -$OPTARG" >&2; exit 1;;
     esac
 done
@@ -42,6 +44,9 @@ if [ "$linker_variant" = "" ]; then
         (
             echo "Launching $linker_variant/14"
             cmd=("${cmd_base[@]}" -l "$linker_variant" -o)
+            if [ "$exhaustive" = "true" ]; then
+                cmd=("${cmd_base[@]}" -l "$linker_variant" -o -e)              
+            fi
             "${cmd[@]}"
             file="$HOME/TELSAM-Fusion-Crystallography-with-Rosetta/${linker_variant}/${linker_variant}_chart.json"
             result=$(jq '
@@ -85,10 +90,16 @@ else
         sleep 2
     fi
 
-    if [ $optimize_TELSAM = "true" ]; then
+    cmd=("${cmd_base[@]}" -l "$linker_variant")
+    if [ "$optimize_TELSAM" = "true" ]; then
         cmd=("${cmd_base[@]}" -l "$linker_variant" -o)
+        if [ "$exhaustive" = "true" ]; then
+            cmd=("${cmd_base[@]}" -l "$linker_variant" -o -e)
+        fi
     else
-        cmd=("${cmd_base[@]}" -l "$linker_variant")
+        if [ "$exhaustive" = "true" ]; then
+            cmd=("${cmd_base[@]}" -l "$linker_variant" -e)
+        fi
     fi
     "${cmd[@]}"
     #fasta="$HOME/TELSAM-Fusion-Crystallography-with-Rosetta/${linker_variant}/${TELSAM_version}--${client}_${linker_variant}_${min_ab}_${min_d}.fasta"
