@@ -9,6 +9,13 @@ degree_rotation=""
 remake_TELSAM="false"
 optimize_TELSAM="false"
 exhaustive="false"
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+gene_designer="$script_dir/GeneDesigner2.exe"
+
+if [ ! -x "$gene_designer" ]; then
+    echo "GeneDesigner executable not found or not executable: $gene_designer" >&2
+    exit 1
+fi
 
 while getopts "pt:c:l:u:d:r:oe" flag
 do
@@ -26,6 +33,8 @@ do
     esac
 done
 
+client_name="${client##*/}"
+
 cmd_base=(
     python ~/TELSAM-Fusion-Crystallography-with-Rosetta/start_TELSetta.py \
     -t "$TELSAM_version" \
@@ -38,11 +47,11 @@ cmd_base=(
 #If no linker variant of interest is provided, test all of them in parallel without posting them to PyMOL. Then, with the lowest-energy combinations from
 #each of the fourteen linker variants, run a symmetric refinement and save the pdb.
 if [ "$linker_variant" = "" ]; then
-    echo "Running start_TELSetta for each linker variant (0/14)"
+    echo "Running start_TELSetta for each linker variant (0/15)"
 
-    for linker_variant in {1..14}; do
+    for linker_variant in {0..15}; do
         (
-            echo "Launching $linker_variant/14"
+            echo "Launching $linker_variant/15"
             cmd=("${cmd_base[@]}" -l "$linker_variant" -o)
             if [ "$exhaustive" = "true" ]; then
                 cmd=("${cmd_base[@]}" -l "$linker_variant" -o -e)              
@@ -73,10 +82,10 @@ if [ "$linker_variant" = "" ]; then
                 -l "$linker_variant" 
             )
             "${mcmd[@]}"
-            #fasta="$HOME/TELSAM-Fusion-Crystallography-with-Rosetta/${linker_variant}/${TELSAM_version}--${client}_${linker_variant}_${min_ab}_${min_d}.fasta"
-            #fastout="$HOME/TELSAM-Fusion-Crystallography-with-Rosetta/${TELSAM_version}--${client}_${linker_variant}_${min_ab}_${min_d}_gene.fasta"
-            #echo "fasta:$fasta fastout:$fastout"
-            #GeneDesigner2.exe "$fasta" "$fastout" "None"
+            fasta="$HOME/TELSAM-Fusion-Crystallography-with-Rosetta/${linker_variant}/${TELSAM_version}--${client_name}_${linker_variant}.fasta"
+            fastout="$HOME/TELSAM-Fusion-Crystallography-with-Rosetta/${TELSAM_version}--${client_name}_${linker_variant}_gene.fasta"
+            echo "fasta:$fasta fastout:$fastout"
+            "$gene_designer" "$fasta" "$fastout" "None"
         ) &
 
     done
@@ -102,8 +111,8 @@ else
         fi
     fi
     "${cmd[@]}"
-    #fasta="$HOME/TELSAM-Fusion-Crystallography-with-Rosetta/${linker_variant}/${TELSAM_version}--${client}_${linker_variant}_${min_ab}_${min_d}.fasta"
-    #fastout="$HOME/TELSAM-Fusion-Crystallography-with-Rosetta/${TELSAM_version}--${client}_${linker_variant}_${min_ab}_${min_d}_gene.fasta"
-    #echo "fasta:$fasta fastout:$fastout"
-    #GeneDesigner2.exe "$fasta" "$fastout" "None"
+    fasta="$HOME/TELSAM-Fusion-Crystallography-with-Rosetta/${linker_variant}/${TELSAM_version}--${client_name}_${linker_variant}.fasta"
+    fastout="$HOME/TELSAM-Fusion-Crystallography-with-Rosetta/${TELSAM_version}--${client_name}_${linker_variant}_gene.fasta"
+    echo "fasta:$fasta fastout:$fastout"
+    "$gene_designer" "$fasta" "$fastout" "None"
 fi
