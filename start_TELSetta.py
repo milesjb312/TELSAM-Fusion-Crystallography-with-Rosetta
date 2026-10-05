@@ -31,7 +31,10 @@ from pyrosetta.rosetta.core.select.residue_selector import TrueResidueSelector
 from pyrosetta.rosetta.core.select.residue_selector import ChainSelector
 from pyrosetta.rosetta.core.select.residue_selector import NeighborhoodResidueSelector
 from pyrosetta.rosetta.core.select.residue_selector import OrResidueSelector
+from pyrosetta.rosetta.core.select.residue_selector import AndResidueSelector
 from pyrosetta.rosetta.core.select.residue_selector import NotResidueSelector
+from pyrosetta.rosetta.core.select.residue_selector import ResidueIndexSelector
+from pyrosetta.rosetta.core.select.residue_selector import VirtualResidueSelector
 
 from pyrosetta.rosetta.core.scoring.dssp import Dssp
 from pyrosetta.rosetta.core.scoring import fa_rep
@@ -78,10 +81,12 @@ class TELSetta:
 	-r "remake_TELSAM" (bool indicating whether the 1TEL subunit should be remade or reused from a previous session.
 	Will be deprecated in favor of recreating the 1TEL subunit every time.)\n
 	-o "optimize" (bool indicating whether a precise set of inputs including linker_variant and unit_cell_ab should be further refined.)\n
-	-e "exhaustive" (bool indicating whether all poses should be modeled and scored, or whether Monte Carlo sampling should proceed)"""
+	-e "exhaustive" (bool indicating whether all poses should be modeled and scored, or whether Monte Carlo sampling should proceed)\n
+	-s "client_start_residue" (the residue number in the client protein from which to begin fusion)"""
 	def __init__(self):
 		self.TELSAM_version = "1TEL"
 		self.client_pdb = None
+		self.client_start_residue = None
 		self.linker_variant = None
 		self.unit_cell_ab = None
 		self.degree_rotation = None
@@ -99,7 +104,7 @@ class TELSetta:
 			)
 		}
 		try:
-			optlist, args = getopt.getopt(sys.argv[1:], "t:c:l:u:d:r:oe")
+			optlist, args = getopt.getopt(sys.argv[1:], "t:c:l:u:d:r:oe:s:")
 			for o, a in optlist:
 				if o == '-t':
 					if a != "1TEL":
@@ -109,9 +114,16 @@ class TELSetta:
 						self.TELSAM_version = a
 				elif o == '-c':
 					self.client_pdb = a
+				elif o == '-s':
+					if a!="":
+						self.client_start_residue = int(a)
 				elif o == '-l':
 					if a!="":
 						self.linker_variant = int(a)
+						self.start_residue_to_superimpose = 17
+						if self.linker_variant>=16:
+							self.remake_TELSAM_bool = True
+							self.start_residue_to_superimpose = 24
 				elif o =='-u':
 					if a!="":
 						self.unit_cell_ab = float(a)
@@ -132,6 +144,10 @@ class TELSetta:
 				sys.exit(1)
 			if not self.optimize:
 				self.centroids = False
+			if self.linker_variant is None:
+				self.linker_variant = 0
+			if self.start_residue_to_superimpose is None:
+				self.start_residue_to_superimpose = 17
 		except getopt.GetoptError as err:
 			print(err)
 			sys.exit(1)
@@ -190,43 +206,44 @@ class TELSetta:
 		TELS_func = rosetta.core.scoring.func.HarmonicFunc(0.0, 1.0)
 		client_func = rosetta.core.scoring.func.FlatHarmonicFunc(0.0, 1.0, standard_deviation)
 		reference_atom = AtomID(1, 1)
-		for residue in range(1, self.TELSAM_module_end + 1):
-			for atom in range(1, pose.residue(residue).natoms() + 1):
-				atom_id = AtomID(atom, residue)
-				constraint = rosetta.core.scoring.constraints.CoordinateConstraint(
-					atom_id,
-					reference_atom,
-					pose.xyz(atom_id),
-					TELS_func,
-				)
-				pose.add_constraint(constraint)
+		for chain in range(1, pose.num_chains() + 1):
+			for residue in range(pose.chain_begin(chain), pose.chain_begin(chain)+self.TELSAM_module_end):
+				for atom in range(1, pose.residue(residue).natoms() + 1):
+					atom_id = AtomID(atom, residue)
+					constraint = rosetta.core.scoring.constraints.CoordinateConstraint(
+						atom_id,
+						reference_atom,
+						pose.xyz(atom_id),
+						TELS_func,
+					)
+					pose.add_constraint(constraint)
 
-		client_start = self.TELSAM_module_end + 1
-		for first_residue in range(client_start, pose.total_residue() + 1):
-			if pose.residue(first_residue).is_virtual_residue():
-				continue
-			for second_residue in range(first_residue + 7, pose.total_residue() + 1):
-				if pose.residue(second_residue).is_virtual_residue():
+		for chain in range(1,pose.num_chains()+1):
+			for first_residue in range(pose.chain_begin(chain)+self.TELSAM_module_end, pose.chain_end(chain)+1):
+				if pose.residue(first_residue).is_virtual_residue():
 					continue
-				first_atom_id = AtomID(pose.residue(first_residue).atom_index("CA"), first_residue)
-				second_atom_id = AtomID(pose.residue(second_residue).atom_index("CA"), second_residue)
-				distance = pose.xyz(first_atom_id).distance(pose.xyz(second_atom_id))
-				client_func = rosetta.core.scoring.func.FlatHarmonicFunc(
-					distance,
-					1.0,
-					standard_deviation,
-				)
-				constraint = rosetta.core.scoring.constraints.AtomPairConstraint(
-					first_atom_id,
-					second_atom_id,
-					client_func,
-				)
-				pose.add_constraint(constraint)
+				for second_residue in range(first_residue + 7, pose.chain_end(chain)+1):
+					if pose.residue(second_residue).is_virtual_residue():
+						continue
+					first_atom_id = AtomID(pose.residue(first_residue).atom_index("CA"), first_residue)
+					second_atom_id = AtomID(pose.residue(second_residue).atom_index("CA"), second_residue)
+					distance = pose.xyz(first_atom_id).distance(pose.xyz(second_atom_id))
+					client_func = rosetta.core.scoring.func.FlatHarmonicFunc(
+						distance,
+						1.0,
+						standard_deviation,
+					)
+					constraint = rosetta.core.scoring.constraints.AtomPairConstraint(
+						first_atom_id,
+						second_atom_id,
+						client_func,
+					)
+					pose.add_constraint(constraint)
 
 	def passes_fa_rep_filter(self, pose):
 		"""Return False when the pose has excessive repulsive energy."""
 		self.sf(pose)
-		fa_rep_energy = pose.energies().total_energies()[fa_rep]
+		fa_rep_energy = pose.energies().total_energies()[fa_rep]*self.sf.get_weight(fa_rep)
 		passes = fa_rep_energy <= self.fa_rep_cutoff
 		print(f"fa_rep: {fa_rep_energy:.3f} (cutoff: {self.fa_rep_cutoff:.3f})")
 		return passes
@@ -266,13 +283,44 @@ class TELSetta:
 		return energy
 		##############################################################################################
 
+	def bound_separated_interface_energy(self, pose):
+		"""Score chain A against the remaining explicit crystal chains without repacking."""
+		explicit_pose = pose.clone()
+		if is_symmetric(explicit_pose):
+			rosetta.core.pose.symmetry.make_asymmetric_pose(explicit_pose)
+
+		virtual_residues = [
+			residue
+			for residue in range(1, explicit_pose.total_residue() + 1)
+			if explicit_pose.residue(residue).is_virtual_residue()
+		]
+		for residue in reversed(virtual_residues):
+			explicit_pose.delete_residue_slow(residue)
+
+		if explicit_pose.num_chains() < 2:
+			raise ValueError("Bound-versus-separated scoring requires at least two chains")
+
+		chains = explicit_pose.split_by_chain()
+		chain_a = chains[1]
+		other_chains = Pose()
+		for chain in range(2, len(chains) + 1):
+			append_pose_to_pose(other_chains, chains[chain], True)
+
+		bound_score = self.interface_sf(explicit_pose)
+		separated_score = self.interface_sf(chain_a) + self.interface_sf(other_chains)
+		interface_energy = bound_score - separated_score
+		print(f"Bound score: {bound_score:.3f}")
+		print(f"Separated score: {separated_score:.3f}")
+		print(f"Bound - separated interface energy: {interface_energy:.3f}")
+		return interface_energy
+
 	def interface_refine(self,pose) -> float:
 		"""First, creates chain selectors for all chains.\n
 		Then, creates NeighborhoodResidueSelectors that accept the chain selectors as arguments...\n
 		Then, creates an OrResidueSelector that accepts both NeighborhoodResidueSelectors as arguments...\n
 		Then, actually generates a selection by applying the previous selector on the pose.\n
-		Creates a movemap_factory that disables movement of the bb and chi angles for all but the interface selector?\n
-		Creates a TaskFactory to restrict to repacking??? Why isn't this the default?\n
+		Creates a movemap_factory that disables movement of the bb and chi angles for all but the interface selector\n
+		Creates a TaskFactory to restrict to repacking\n
 		Changes self.relax by setting the movemap factory and task factory to it.\n
 		Relaxes the passed pose.\n
 		Pushes to PyMOL.\n
@@ -288,9 +336,9 @@ class TELSetta:
 			chain_sel = ChainSelector(alphanumeric_dict[chain])#create a chain selector for each chain
 			chain_sels.append(chain_sel)#add the chain selector tool to the chain_sels list
 		interface_sels = []
-		chain_A_neighbor_sel = NeighborhoodResidueSelector(chain_sels[0],3,False)#Create a neighborhood residue selector for chain A
+		chain_A_neighbor_sel = NeighborhoodResidueSelector(chain_sels[0],4,False)#Create a neighborhood residue selector for chain A
 		for chain_sel in chain_sels[1:]:#Walk through all the chain selectors in the chain_sels list, but skip the chain A selector
-			neighbor_sel = NeighborhoodResidueSelector(chain_sel, 3, False)#Create a neighborhood residue selector for every chain
+			neighbor_sel = NeighborhoodResidueSelector(chain_sel, 4, False)#Create a neighborhood residue selector for every chain
 			interface_sel = OrResidueSelector(chain_A_neighbor_sel,neighbor_sel)#Create an interface selector; basically, select all atoms that are in both chain A and the current neighborhood selector
 			interface_sels.append(interface_sel)#Add each interface selector to the interface_sels list
 
@@ -298,6 +346,21 @@ class TELSetta:
 		all_interface_sel = interface_sels[0]#Initialize an interface_selection that includes only the selector for A:B, then...
 		for sel in interface_sels[1:]:#Walk through all the other interface_selections
 			all_interface_sel = OrResidueSelector(all_interface_sel,sel)#Change the all_interface_sel so that it counts both those previously mentioned and any in the current interface_selection
+		module_ranges = []
+		for chain in range(1, pose.num_chains() + 1):
+			first_module_residue = pose.chain_begin(chain)
+			last_module_residue = min(
+				first_module_residue + self.TELSAM_module_end - 1,
+				pose.chain_end(chain),
+			)
+			if first_module_residue <= last_module_residue:
+				module_ranges.append(f"{first_module_residue}-{last_module_residue}")
+		module_selector = ResidueIndexSelector(",".join(module_ranges))
+		excluded_selector = OrResidueSelector(module_selector, VirtualResidueSelector())
+		all_interface_sel = AndResidueSelector(
+			all_interface_sel,
+			NotResidueSelector(excluded_selector),
+		)
 		non_interface_sel = NotResidueSelector(all_interface_sel)#Finally, create a selector that includes all the atoms not in all_interface_sel
 
 		# MoveMap DOESN'T SEEM TO BE WORKING
@@ -314,6 +377,14 @@ class TELSetta:
 		self.relax.set_movemap_factory(movemap_factory)
 		self.relax.set_task_factory(tf)
 		self.relax.apply(pose)
+		try:
+			score = self.bound_separated_interface_energy(pose)
+			self.interfaced = True
+		except Exception as e:
+			print(f'Bound-versus-separated scoring failed: {e}')
+			score = self.refine(pose)
+			self.interfaced = False
+			return score
 
 		iam_string = "A_"
 		for chain in range(2,pose.num_chains()+1):
@@ -324,14 +395,12 @@ class TELSetta:
 		self.iam.set_compute_separated_sasa(True)
 		self.iam.set_calc_dSASA(True)
 		self.iam.set_compute_interface_energy(True)
-		#self.sf(pose)
-		self.iam.apply(pose)
-		score = None
 		try:
+			self.iam.apply(pose)
 			fixed_chains = self.iam.get_fixed_chains()
 			print(f'fixed_chains: {fixed_chains}')
-			score = self.iam.get_interface_dG()
-			print(f'Interface dG: {score}')
+			interface_dG = self.iam.get_interface_dG()
+			print(f'InterfaceAnalyzerMover interface dG: {interface_dG}')
 			cenergy = self.iam.get_complex_energy()
 			print(f'Complex Energy: {cenergy}')
 			csasa = self.iam.get_complexed_sasa()
@@ -340,12 +409,8 @@ class TELSetta:
 			print(f'dsasa: {dsasa}')
 			interface_set = self.iam.get_interface_set()
 			print(f'interface_set: {interface_set}')
-			self.interfaced = True
 		except Exception as e:
-			print(f'InterfaceAnalyzerMover failed: {e}')
-			score = self.refine(pose)
-			print(f'Non-interface dG: {score}')
-			self.interfaced = False
+			print(f'InterfaceAnalyzerMover diagnostics failed: {e}')
 		return score
 
 	def get_CRYST1(self,pdb):
@@ -511,6 +576,30 @@ class TELSetta:
 		mutate_residue(TELSAM_in_9DOC,34,"R",5)
 		mutate_residue(TELSAM_in_9DOC,66,"E",5)
 
+		if self.linker_variant>=16:
+			####################################### EXTEND HELIX ###############################################
+			#Extend TELSAM's helix by 7 amino acids.
+			helix_extender = Pose()
+			#Grab the last 11 residues in TELSAM:
+			append_subpose_to_pose(helix_extender,TELSAM_in_9DOC,TELSAM_in_9DOC.chain_end(1)-10,TELSAM_in_9DOC.chain_end(1))
+			#Align those residues to the end of the helix over 4 amino acids (effectively copying the helix and shifting it over on top of itself)
+			T_residues_to_superimpose = range(TELSAM_in_9DOC.chain_end(1)-3,TELSAM_in_9DOC.chain_end(1)+1)
+			H_residues_to_superimpose = range(helix_extender.chain_begin(1),helix_extender.chain_begin(1)+4)
+			helix_atom_map = AtomID_Map()
+			initialize_atomid_map(helix_atom_map, helix_extender, AtomID())
+			for HR, TR in zip(H_residues_to_superimpose,T_residues_to_superimpose):
+				H_atom = AtomID(helix_extender.residue(HR).atom_index("CA"), HR)
+				T_atom = AtomID(TELSAM_in_9DOC.residue(TR).atom_index("CA"), TR)
+				helix_atom_map.set(H_atom,T_atom)
+			superimpose_pose(helix_extender,TELSAM_in_9DOC,helix_atom_map)
+
+			#Delete 4-aa overlap
+			delete_region(TELSAM_in_9DOC,TELSAM_in_9DOC.chain_end(1)-3,TELSAM_in_9DOC.chain_end(1))
+			#Fuse
+			append_pose_to_pose(TELSAM_in_9DOC,helix_extender,new_chain=False)
+			TELSAM_in_9DOC.conformation().declare_chemical_bond(TELSAM_in_9DOC.chain_end(1)-helix_extender.total_residue(),"C",TELSAM_in_9DOC.chain_end(1)-helix_extender.total_residue()+1,"N")
+			mutate_residue(TELSAM_in_9DOC,90,"A",5)
+			mutate_residue(TELSAM_in_9DOC,92,"K",5)
 		TELSAM_in_9DOC.dump_pdb(os.path.join(self.base,f'TELSAM_in_9DOC.pdb'))
 		last_size = -1
 		while True:
@@ -556,24 +645,29 @@ class TELSetta:
 			os.remove(os.path.join(self.base,f"{self.client_pdb}.pdb"))
 			os.remove(os.path.join(self.base,f"{self.client_pdb}.clean.pdb"))
 			
-			#Extract first 4-aa helical region from target protein to fuse to TELSAM:
-			dssp = Dssp(temp_pose)
-			dssp.insert_ss_into_pose(temp_pose)
-			ss_string = temp_pose.secstruct()
-			first_helix = ss_string.find("HHHHH")
-			append_subpose_to_pose(self.client,temp_pose,temp_pose.chain_begin(1)+first_helix,temp_pose.chain_end(1))
-			
+			if self.client_start_residue is None:
+				#Extract first 4-aa helical region from target protein to fuse to TELSAM:
+				dssp = Dssp(temp_pose)
+				dssp.insert_ss_into_pose(temp_pose)
+				ss_string = temp_pose.secstruct()
+				first_helix = ss_string.find("HHHHH")
+				append_subpose_to_pose(self.client,temp_pose,temp_pose.chain_begin(1)+first_helix,temp_pose.chain_end(1))
+			else:
+				append_subpose_to_pose(self.client,temp_pose,temp_pose.chain_begin(1)+self.client_start_residue-1,temp_pose.chain_end(1))
+			client_start = self.client.chain_begin(1)
+			if self.client.residue(client_start).has_variant_type(rosetta.core.chemical.LOWERTERM_TRUNC_VARIANT):
+				rosetta.core.pose.remove_variant_type_from_pose_residue(
+					self.client,
+					rosetta.core.chemical.LOWERTERM_TRUNC_VARIANT,
+					client_start,
+				)
 			#Align the two helices:
-			self.start_residue_to_superimpose = 17
 			if os.path.exists(os.path.join(self.base,f'scores_file.txt')):
 				os.remove(os.path.join(self.base,f'scores_file.txt'))
 			if os.path.exists(os.path.join(self.base,f'interfaced_scores_file.txt')):
 				os.remove(os.path.join(self.base,f'interfaced_scores_file.txt'))
 			self.TELSAM = self.TELSAM_in_9DOC.clone()
-			if self.linker_variant!=None:
-				self.start_residue_to_superimpose-=self.linker_variant
-			else:
-				self.linker_variant = 1+self.start_residue_to_superimpose
+			self.start_residue_to_superimpose-=self.linker_variant
 			self.TELSAM_module_end = self.TELSAM.chain_end(1)-self.start_residue_to_superimpose-1
 			TELSAM_residues_to_superimpose = range(self.TELSAM.chain_end(1)-self.start_residue_to_superimpose,self.TELSAM.chain_end(1)-self.start_residue_to_superimpose+3)
 			client_residues_to_superimpose = range(1,4)
@@ -649,6 +743,7 @@ class TELSetta:
 						f.write(">"+pdb_path+", score (REU): "+"{:.3e}".format(score)+"\n"+"HHHHHHHHHH"+str(sequence).strip('X'))
 			self.TELSAM.pdb_info().name("Fusion")
 			self.pmm.apply(self.TELSAM)
+			self.pmm.send_energy(self.TELSAM)
 
 		except Exception as e:
 			print(e,file=sys.stderr)
@@ -666,8 +761,8 @@ close to higher interfaced energies, you will not be able to isolate it. It is n
 a clear energy well can be accessed and the gaussian steps and kT are small enough to limit the pose's movement to the inside of that energy well."""
 		ucab = self.get_CRYST1(self.linker_pdb)[0]
 		for u_sample in range(15):
-			test_ucab = ucab + random.gauss(-5,5)
-			ucab_pdb = os.path.join(self.base,f'{self.TELSAM_version}--{self.client_pdb}_{self.linker_variant}_{ucab}.pdb')
+			test_ucab = round(ucab + random.gauss(-5,5),3)
+			ucab_pdb = os.path.join(self.base,f'{self.TELSAM_version}--{self.client_pdb}_{self.linker_variant}_{test_ucab}.pdb')
 			self.change_cell(self.linker_pdb,ucab_pdb,wa=test_ucab,wb=test_ucab)
 			symm_pose = pose_from_pdb(ucab_pdb)
 			makesym = SetupForSymmetryMover("CRYST1")
@@ -680,6 +775,7 @@ a clear energy well can be accessed and the gaussian steps and kT are small enou
 				u_sample = u_sample-1
 				symm_pose.pdb_info().name("failed_ucab_pose")
 				self.pmm.apply(symm_pose)
+				self.pmm.send_energy(symm_pose)
 				continue
 			if self.interfaced:
 				for d_sample in range(4):
@@ -694,10 +790,13 @@ a clear energy well can be accessed and the gaussian steps and kT are small enou
 					if not self.passes_fa_rep_filter(symm_pose):
 						symm_pose.pdb_info().name("failed_degree_pose")
 						self.pmm.apply(symm_pose)
+						self.pmm.send_energy(symm_pose)
 						d_sample = d_sample-1
 						continue
+					symm_pose.dump_pdb(os.path.join(self.base,f'{self.TELSAM_version}--{self.client_pdb}_{self.linker_variant}_{test_ucab}_{test_deg}_symmetric.pdb'))
 					if self.interfaced:
 						self.pmm.apply(symm_pose)
+						self.pmm.send_energy(symm_pose)
 						delta_e = energy - self.scores[self.interfaced]
 						if delta_e<=0 or random.random()<math.exp(-delta_e/3.3):
 							self.min_score_pdbs[self.interfaced] = os.path.join(self.base,f'{self.TELSAM_version}--{self.client_pdb}_{self.linker_variant}_{test_ucab}_{test_deg}.pdb')
@@ -716,6 +815,7 @@ a clear energy well can be accessed and the gaussian steps and kT are small enou
 					else:
 						symm_pose.pdb_info().name("failed_interface_pose")
 						self.pmm.apply(symm_pose)
+						self.pmm.send_energy(symm_pose)
 						d_sample = d_sample-1
 			else:
 				u_sample = u_sample-1
@@ -734,6 +834,7 @@ a clear energy well can be accessed and the gaussian steps and kT are small enou
 		self.add_CRYST1(os.path.basename(ucab_pdb),os.path.basename(ucab_pdb))
 		symm_pose.pdb_info().name("pmm")
 		self.pmm.apply(symm_pose)
+		self.pmm.send_energy(symm_pose)
 		self.chart(self.linker_variant)
 
 def main():
