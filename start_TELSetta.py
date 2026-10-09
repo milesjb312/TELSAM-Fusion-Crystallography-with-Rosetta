@@ -1,10 +1,12 @@
 import sys
+import subprocess
 import requests
 import os
 import getopt
 import re
 import time
 import math
+import random
 import json
 import numpy as np
 
@@ -22,6 +24,7 @@ from pyrosetta.rosetta.core.id import AtomID
 from pyrosetta.rosetta.core.id import AtomID_Map_AtomID as AtomID_Map
 from pyrosetta.rosetta.core.scoring import superimpose_pose
 from pyrosetta.rosetta.protocols.grafting import delete_region
+from pyrosetta.rosetta.core.scoring import CA_rmsd
 
 #Movemap Factory and Selectors for interface refinement/scoring
 from pyrosetta.rosetta.core.select.movemap import MoveMapFactory, move_map_action
@@ -29,18 +32,23 @@ from pyrosetta.rosetta.core.select.residue_selector import TrueResidueSelector
 from pyrosetta.rosetta.core.select.residue_selector import ChainSelector
 from pyrosetta.rosetta.core.select.residue_selector import NeighborhoodResidueSelector
 from pyrosetta.rosetta.core.select.residue_selector import OrResidueSelector
+from pyrosetta.rosetta.core.select.residue_selector import AndResidueSelector
+from pyrosetta.rosetta.core.select.residue_selector import NotResidueSelector
+from pyrosetta.rosetta.core.select.residue_selector import ResidueIndexSelector
+from pyrosetta.rosetta.core.select.residue_selector import VirtualResidueSelector
 
 from pyrosetta.rosetta.core.scoring.dssp import Dssp
 from pyrosetta.rosetta.core.scoring import fa_rep
 from pyrosetta.rosetta.core.scoring import fa_atr
-#from pyrosetta.rosetta.protocols.simple_filters import ShapeComplementarityFilter
-#from pyrosetta.rosetta.core.scoring.sc import ShapeComplementarityCalculator
+from pyrosetta.rosetta.protocols.simple_filters import ShapeComplementarityFilter
 from pyrosetta.rosetta.protocols.analysis import InterfaceAnalyzerMover
 
 from pyrosetta import PyMOLMover
 from pyrosetta.rosetta.core.kinematics import MoveMap
 from pyrosetta.rosetta.core.select.movemap import move_map_action
 from pyrosetta.rosetta.protocols.symmetry import SetupForSymmetryMover
+from pyrosetta.rosetta.core.pose.symmetry import is_symmetric
+
 from pyrosetta.rosetta.protocols.relax import FastRelax
 from pyrosetta.rosetta.core.scoring import get_score_function
 #from pyrosetta.rosetta.core.scoring import get_fa_score_function
@@ -50,17 +58,20 @@ from pyrosetta.rosetta.protocols.minimization_packing import PackRotamersMover
 from pyrosetta.rosetta.core.pack.task import TaskFactory
 from pyrosetta.rosetta.core.pack.task.operation import InitializeFromCommandline, RestrictToRepacking, OperateOnResidueSubset, RestrictToRepackingRLT
 from pyrosetta.rosetta.protocols.minimization_packing import MinMover
+from pyrosetta.rosetta.core.pack.task.operation import PreventRepackingRLT
 
 from pyrosetta.rosetta.numeric import xyzMatrix_double_t, xyzVector_double_t
 
 from matplotlib import pyplot as plt
 
-#pyrosetta.init("-crystal_refine -cryst::refinable_lattice -score_symm_complex")
-pyrosetta.init("-crystal_refine")
+pyrosetta.init("-crystal_refine -cryst::refinable_lattice -score_symm_complex -mute all")
+rosetta.basic.options.set_real_option("cryst:interaction_shell",12.0)
+#pyrosetta.init()
 
 class TELSetta:
-	"""Using PyRosetta, creates a 1TEL fusion to a target protein to create a TFC (TELSAM Fusion Construct), docks the TFC against itself at several degrees and 
-	distances, scores each docking attempt, and returns a list of scores with their associated settings.\n
+	"""Using PyRosetta, creates a 1TEL fusion to a target protein to create a TFC (TELSAM Fusion Construct), docks the TFC against itself in the P65 space group at several\
+ rotational offsets about the C-axis of the unit cell and distance offsets with respect to the A and B lengths of the unit cell, scores each docking\
+ attempt, and returns a list of scores with their associated settings.\n
 	Accepts as arguments (-flag "arg"):\n
 	-t "TELSAM_version" (not yet implemented; only accepts "1TEL" or nothing)\n
 	-c "client_pdb" (PDB id to fetch or path to a PDB file)\n
@@ -69,18 +80,23 @@ class TELSetta:
 	-d "degree_rotation" (the degree of rotation offset by which to turn the TFCs about the C axis in the crystal's default unit cell)\n
 	-r "remake_TELSAM" (bool indicating whether the 1TEL subunit should be remade or reused from a previous session.
 	Will be deprecated in favor of recreating the 1TEL subunit every time.)\n
-	-o "optimize" (bool indicating whether a precise set of inputs including linker_variant and unit_cell_ab should be further refined.)"""
+	-o "optimize" (bool indicating whether a precise set of inputs including linker_variant and unit_cell_ab should be further refined.)\n
+	-e "exhaustive" (bool indicating whether all poses should be modeled and scored, or whether Monte Carlo sampling should proceed)\n
+	-s "client_start_residue" (the residue number in the client protein from which to begin fusion)
+	-n "native_PDB" (PDB id of a native structure to compare to the final solution)"""
 	def __init__(self):
 		self.TELSAM_version = "1TEL"
 		self.client_pdb = None
+		self.client_start_residue = None
 		self.linker_variant = None
 		self.unit_cell_ab = None
 		self.degree_rotation = None
 		self.remake_TELSAM_bool = False
 		self.optimize = False
+		self.exhaustive = False
 		self.centroids = False
-		self.interfaced = False
-		self.scores = {}
+		self.symmdef_generating =  True
+		self.fa_rep_cutoff = 40000.0
 		self.headers = {
 			"User-Agent": (
 			"Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -89,7 +105,7 @@ class TELSetta:
 			)
 		}
 		try:
-			optlist, args = getopt.getopt(sys.argv[1:], "t:c:l:u:d:r:o")
+			optlist, args = getopt.getopt(sys.argv[1:], "t:c:l:u:d:r:oe:s:n:")
 			for o, a in optlist:
 				if o == '-t':
 					if a != "1TEL":
@@ -99,9 +115,16 @@ class TELSetta:
 						self.TELSAM_version = a
 				elif o == '-c':
 					self.client_pdb = a
+				elif o == '-s':
+					if a!="":
+						self.client_start_residue = int(a)
 				elif o == '-l':
 					if a!="":
 						self.linker_variant = int(a)
+						self.start_residue_to_superimpose = 17
+						if self.linker_variant>=16:
+							self.remake_TELSAM_bool = True
+							self.start_residue_to_superimpose = 24
 				elif o =='-u':
 					if a!="":
 						self.unit_cell_ab = float(a)
@@ -112,6 +135,10 @@ class TELSetta:
 					self.remake_TELSAM_bool = a.upper() in ['T','TRUE',1]
 				elif o == '-o':
 					self.optimize = True
+				elif o == '-e':
+					self.exhaustive = True
+				elif o == '-n':
+					self.native_PDB = a
 				else:
 					print(f'Unhandled argument: {o}')
 					sys.exit(1)
@@ -120,12 +147,21 @@ class TELSetta:
 				sys.exit(1)
 			if not self.optimize:
 				self.centroids = False
+			if self.linker_variant is None:
+				self.linker_variant = 0
+			if self.start_residue_to_superimpose is None:
+				self.start_residue_to_superimpose = 17
 		except getopt.GetoptError as err:
 			print(err)
 			sys.exit(1)
 
 		self.base = os.path.join(os.path.dirname(__file__),str(self.linker_variant))
 		os.makedirs(self.base,exist_ok=True)
+		self.interfaced = False
+		self.scores = {True:200000,False:200000}
+		self.scores_files = {True:os.path.join(self.base,f'interfaced_scores_file.txt'),False:os.path.join(self.base,f'scores_file.txt')}
+		self.min_score_pdbs = {True:None,False:None}
+
 		self.pmm = PyMOLMover()
 		self.pmm.keep_history(True)
 		self.energies_vs_ucab_vs_deg = {'linker':[],'energy':[],'ucab':[],'deg':[]}
@@ -143,10 +179,14 @@ class TELSetta:
 		Assigns self.packer as PackRotamersMover(self.sf)
 		Changes PackRotamersMover settings by applying the previously-made task factory???\n
 		Assigns self.min_mover as MinMover(), applies the score_function to its settings and applies the "lbfgs_armijo_nonmonotone" setting as its min_type.\n
-		Assigns self.iam as InterfaceAnalyzerMover("A_B"), and sets its scorefunction to self.sf.
 		"""
 		#################### SETUP FOR REFINEMENT ##########################
 		self.sf = get_score_function()
+		self.sf.set_weight(rosetta.core.scoring.coordinate_constraint, 1.0)
+		self.sf.set_weight(rosetta.core.scoring.atom_pair_constraint, 1.0)
+		self.interface_sf = self.sf.clone()
+		self.interface_sf.set_weight(rosetta.core.scoring.coordinate_constraint, 0.0)
+		self.interface_sf.set_weight(rosetta.core.scoring.atom_pair_constraint, 0.0)
 		#self.sf = ScoreFunctionFactory.create_score_function("beta_nov16_cart")
 		#Relax mover
 		self.relax = FastRelax()
@@ -164,17 +204,52 @@ class TELSetta:
 		self.min_mover.score_function(self.sf)
 		self.min_mover.min_type("lbfgs_armijo_nonmonotone")
 
-		"""
-		#Symmetry stuff
-		self.interaction_shell_size = self.furthest_x*0.65
-		print(f'INTERACTION SHELL SIZE: {self.interaction_shell_size}')
-		rosetta.basic.options.set_real_option("cryst:interaction_shell", self.interaction_shell_size)
-		self.makesym = SetupForSymmetryMover("CRYST1")
-		"""
+	def add_coordinate_constraints(self, pose, standard_deviation=8.0):
+		"""Restrain TELSAM coordinates and preserve client geometry with weak distance restraints."""
+		TELS_func = rosetta.core.scoring.func.HarmonicFunc(0.0, 1.0)
+		client_func = rosetta.core.scoring.func.FlatHarmonicFunc(0.0, 1.0, standard_deviation)
+		reference_atom = AtomID(1, 1)
+		for chain in range(1, pose.num_chains() + 1):
+			for residue in range(pose.chain_begin(chain), pose.chain_begin(chain)+self.TELSAM_module_end):
+				for atom in range(1, pose.residue(residue).natoms() + 1):
+					atom_id = AtomID(atom, residue)
+					constraint = rosetta.core.scoring.constraints.CoordinateConstraint(
+						atom_id,
+						reference_atom,
+						pose.xyz(atom_id),
+						TELS_func,
+					)
+					pose.add_constraint(constraint)
 
-		#Shape Complementarity Filter
-		self.iam = InterfaceAnalyzerMover("A_B")
-		self.iam.set_scorefunction(self.sf)
+		for chain in range(1,pose.num_chains()+1):
+			for first_residue in range(pose.chain_begin(chain)+self.TELSAM_module_end, pose.chain_end(chain)+1):
+				if pose.residue(first_residue).is_virtual_residue():
+					continue
+				for second_residue in range(first_residue + 7, pose.chain_end(chain)+1):
+					if pose.residue(second_residue).is_virtual_residue():
+						continue
+					first_atom_id = AtomID(pose.residue(first_residue).atom_index("CA"), first_residue)
+					second_atom_id = AtomID(pose.residue(second_residue).atom_index("CA"), second_residue)
+					distance = pose.xyz(first_atom_id).distance(pose.xyz(second_atom_id))
+					client_func = rosetta.core.scoring.func.FlatHarmonicFunc(
+						distance,
+						1.0,
+						standard_deviation,
+					)
+					constraint = rosetta.core.scoring.constraints.AtomPairConstraint(
+						first_atom_id,
+						second_atom_id,
+						client_func,
+					)
+					pose.add_constraint(constraint)
+
+	def passes_fa_rep_filter(self, pose):
+		"""Return False when the pose has excessive repulsive energy."""
+		self.sf(pose)
+		fa_rep_energy = pose.energies().total_energies()[fa_rep]*self.sf.get_weight(fa_rep)
+		passes = fa_rep_energy <= self.fa_rep_cutoff
+		print(f"fa_rep: {fa_rep_energy:.3f} (cutoff: {self.fa_rep_cutoff:.3f})")
+		return passes
 
 	def refine(self,pose) -> float:
 		"""Creates a movemap, freezing bb and chi angles, then unfreezing the atoms that are outside of the 1TEL module.\n
@@ -194,7 +269,7 @@ class TELSetta:
 		#for every chain. Later, this information is passed into the min_mover as the list of residues that are allowed to move and in what ways they can move.
 		#Theoretically, the 1TEL subunit itself should not change much.
 		for chain in range(1,pose.num_chains()+1):
-			for i in range(self.TELSAM.chain_end(chain)-self.client.total_residue()-self.start_residue_to_superimpose,self.TELSAM.chain_end(chain)):
+			for i in range(pose.chain_end(chain)-self.client.total_residue()-self.start_residue_to_superimpose,pose.chain_end(chain)+1):
 				movemap.set_bb(i, True)
 				movemap.set_chi(i, True)
 		#Refine gently
@@ -211,86 +286,135 @@ class TELSetta:
 		return energy
 		##############################################################################################
 
+	def bound_separated_interface_energy(self, pose):
+		"""Score chain A against the remaining explicit crystal chains without repacking."""
+		explicit_pose = pose.clone()
+		if is_symmetric(explicit_pose):
+			rosetta.core.pose.symmetry.make_asymmetric_pose(explicit_pose)
+
+		virtual_residues = [
+			residue
+			for residue in range(1, explicit_pose.total_residue() + 1)
+			if explicit_pose.residue(residue).is_virtual_residue()
+		]
+		for residue in reversed(virtual_residues):
+			explicit_pose.delete_residue_slow(residue)
+
+		if explicit_pose.num_chains() < 2:
+			raise ValueError("Bound-versus-separated scoring requires at least two chains")
+
+		chains = explicit_pose.split_by_chain()
+		chain_a = chains[1]
+		other_chains = Pose()
+		for chain in range(2, len(chains) + 1):
+			append_pose_to_pose(other_chains, chains[chain], True)
+
+		bound_score = self.interface_sf(explicit_pose)
+		separated_score = self.interface_sf(chain_a) + self.interface_sf(other_chains)
+		interface_energy = bound_score - separated_score
+		print(f"Bound score: {bound_score:.3f}")
+		print(f"Separated score: {separated_score:.3f}")
+		print(f"Bound - separated interface energy: {interface_energy:.3f}")
+		return interface_energy
+
 	def interface_refine(self,pose) -> float:
-		"""First, creates chain selectors for chains A and B.\n
+		"""First, creates chain selectors for all chains.\n
 		Then, creates NeighborhoodResidueSelectors that accept the chain selectors as arguments...\n
 		Then, creates an OrResidueSelector that accepts both NeighborhoodResidueSelectors as arguments...\n
-		Then, actually generates a selection by applying the previous selector on the pose (this may be broken).\n
-		Creates a movemap_factory that disables movement of the bb and chi angles for all but the interface selector?\n
-		Creates a TaskFactory to restrict to repacking??? Why isn't this the default?\n
+		Then, actually generates a selection by applying the previous selector on the pose.\n
+		Creates a movemap_factory that disables movement of the bb and chi angles for all but the interface selector\n
+		Creates a TaskFactory to restrict to repacking\n
 		Changes self.relax by setting the movemap factory and task factory to it.\n
 		Relaxes the passed pose.\n
 		Pushes to PyMOL.\n
-		Tries to run the InterfaceAnalyzerMover("A_B") and return interface dg. On a failure, instead runs normal 
-		refinement and returns the program to non-interfaced mode. Whenever the program switches from non-interfaced 
-		mode to interfaced mode, a new local_min_score is saved.\n
+		Tries to run the InterfaceAnalyzerMover("A_BCDEFG...") and return interface dg. On a failure, instead runs normal 
+		refinement and returns the program to non-interfaced mode.\n
 		In the future, the migration between non-interfaced and interfaced modes may be a good indicator that we
 		should switch into a higher-granularity docking simulation."""
-		#Create selectors to get chains
-		chainA_sel = ChainSelector("A")
-		chainB_sel = ChainSelector("B")
-		#chainC_sel = ChainSelector("C")
-		#Create selectors to find neighbors of each chain
-		chainA_neighbors_sel = NeighborhoodResidueSelector(chainA_sel,5.0,False)
-		chainB_neighbors_sel = NeighborhoodResidueSelector(chainB_sel,5.0,False)
-		#chainC_neighbors_sel = NeighborhoodResidueSelector(chainC_sel,5.0,False)
-		interfaceAB_sel = OrResidueSelector(chainA_neighbors_sel,chainB_neighbors_sel)
-		#interfaceBC_sel = OrResidueSelector(chainB_neighbors_sel,chainC_neighbors_sel)
-		#Actually select residues of interest
-		interfaceAB = interfaceAB_sel.apply(pose)
-		print("Interface-region residues:", [i+1 for i, inter in enumerate(interfaceAB) if inter])
-		#interfaceBC = interfaceBC_sel.apply(pose)
-		
-		#Define residues that can move
-		movemap_factory = MoveMapFactory()
-		movemap_factory.add_bb_action(move_map_action.mm_disable, TrueResidueSelector())
-		movemap_factory.add_chi_action(move_map_action.mm_disable, TrueResidueSelector())
-		movemap_factory.add_bb_action(move_map_action.mm_enable, interfaceAB_sel)
-		movemap_factory.add_chi_action(move_map_action.mm_enable, interfaceAB_sel)
+		alphanumeric_dict = {1:"A",2:"B",3:"C",4:"D",5:"E",6:"F",7:"G",8:"H",9:"I",10:"J",11:"K",12:"L",13:"M",14:"N",15:"O",16:"P",
+					   17:"Q",18:"R",19:"S",20:"T",21:"U",22:"V",23:"W",24:"X",25:"Y",26:"Z",27:"0",28:"1",29:"2",30:"3",31:"4",32:"5",33:"6",34:"7",35:"8",36:"9",37:"10",38:"11",39:"12",40:"13",41:"14",42:"15",43:"16",44:"17",45:"18",46:"19",47:"20",48:"21",49:"22",50:"23",51:"24",52:"25",53:"26",54:"27",55:"28",56:"29",57:"30"}
+		chain_sels = []
+		for chain in range(1,pose.num_chains()+1):#walk through the chains in the pose
+			print("chain", chain, "begin/end", pose.chain_begin(chain), pose.chain_end(chain), "label", pose.pdb_info().chain(pose.chain_begin(chain)))
+			chain_sel = ChainSelector(alphanumeric_dict[chain])#create a chain selector for each chain
+			chain_sels.append(chain_sel)#add the chain selector tool to the chain_sels list
+		interface_sels = []
+		chain_A_neighbor_sel = NeighborhoodResidueSelector(chain_sels[0],4,False)#Create a neighborhood residue selector for chain A
+		for chain_sel in chain_sels[1:]:#Walk through all the chain selectors in the chain_sels list, but skip the chain A selector
+			neighbor_sel = NeighborhoodResidueSelector(chain_sel, 4, False)#Create a neighborhood residue selector for every chain
+			interface_sel = OrResidueSelector(chain_A_neighbor_sel,neighbor_sel)#Create an interface selector; basically, select all atoms that are in both chain A and the current neighborhood selector
+			interface_sels.append(interface_sel)#Add each interface selector to the interface_sels list
 
-		#relax
-		#restrict residues that can move
+		# Combine all interfaces
+		all_interface_sel = interface_sels[0]#Initialize an interface_selection that includes only the selector for A:B, then...
+		for sel in interface_sels[1:]:#Walk through all the other interface_selections
+			all_interface_sel = OrResidueSelector(all_interface_sel,sel)#Change the all_interface_sel so that it counts both those previously mentioned and any in the current interface_selection
+		module_ranges = []
+		for chain in range(1, pose.num_chains() + 1):
+			first_module_residue = pose.chain_begin(chain)
+			last_module_residue = min(
+				first_module_residue + self.TELSAM_module_end - 1,
+				pose.chain_end(chain),
+			)
+			if first_module_residue <= last_module_residue:
+				module_ranges.append(f"{first_module_residue}-{last_module_residue}")
+		module_selector = ResidueIndexSelector(",".join(module_ranges))
+		excluded_selector = OrResidueSelector(module_selector, VirtualResidueSelector())
+		all_interface_sel = AndResidueSelector(
+			all_interface_sel,
+			NotResidueSelector(excluded_selector),
+		)
+		non_interface_sel = NotResidueSelector(all_interface_sel)#Finally, create a selector that includes all the atoms not in all_interface_sel
+
+		# MoveMap DOESN'T SEEM TO BE WORKING
+		movemap_factory = MoveMapFactory()
+		movemap_factory.add_bb_action(move_map_action.mm_disable,TrueResidueSelector())
+		movemap_factory.add_chi_action(move_map_action.mm_disable,TrueResidueSelector())
+		movemap_factory.add_bb_action(move_map_action.mm_enable,all_interface_sel)
+		movemap_factory.add_chi_action(move_map_action.mm_enable,all_interface_sel)
+
+		# TaskFactory DOESN'T SEEM TO BE WORKING
 		tf = TaskFactory()
 		tf.push_back(RestrictToRepacking())
-		tf.push_back(OperateOnResidueSubset(RestrictToRepackingRLT(),interfaceAB))
+		tf.push_back(OperateOnResidueSubset(PreventRepackingRLT(),non_interface_sel))
 		self.relax.set_movemap_factory(movemap_factory)
 		self.relax.set_task_factory(tf)
 		self.relax.apply(pose)
-
-		pdbinfo = pose.pdb_info()
-		for c in range(1, pose.num_chains()+1):
-			print(
-				c,
-				pose.chain_begin(c),
-				pose.chain_end(c),
-				pdbinfo.chain(pose.chain_begin(c))
-			)
-		print(f'fold_tree: {pose.fold_tree()}')
-		pose.pdb_info().name("pmm")
-		self.pmm.apply(pose)
-		self.iam.apply(pose)
-		score = self.iam.get_interface_dG()
-		"""Use the following lines instead in case of three chains
-		relax_interface(interfaceBC_sel)
-		self.iam.set_interface("AB_C")
-		self.iam.apply(pose)
-		score1 = self.iam.get_interface_dG()
-		self.iam.set_interface("A_BC")
-		self.iam.apply(pose)
-		score2 = self.iam.get_interface_dG()
-		score = score1+score2
-		"""
-		#print(f'SASA: {self.iam.get_interface_delta_sasa()}')
-		#print(f'unsat H: {self.iam.get_interface_delta_hbond_unsat()}')
-		#print(f'Interface energy: {self.iam.get_crossterm_interface_energy()}')
-		if not score:
+		print(f'SCCalc: {ShapeComplementarityFilter().report_sm(pose)}')
+		try:
+			score = self.bound_separated_interface_energy(pose)
+			self.interfaced = True
+		except Exception as e:
+			print(f'Bound-versus-separated scoring failed: {e}')
 			score = self.refine(pose)
 			self.interfaced = False
-		else:
-			print(f'INTERFACE WORKED!')
-			if self.interfaced == False:
-				self.local_min_score = score
-			self.interfaced = True
+			return score
+
+		iam_string = "A_"
+		for chain in range(2,pose.num_chains()+1):
+			iam_string = iam_string+alphanumeric_dict[chain]
+		print(f'IAM_STRING: {iam_string}')
+		self.iam = InterfaceAnalyzerMover(iam_string)
+		self.iam.set_scorefunction(self.interface_sf)
+		self.iam.set_compute_separated_sasa(True)
+		self.iam.set_calc_dSASA(True)
+		self.iam.set_compute_interface_energy(True)
+		try:
+			self.iam.apply(pose)
+			fixed_chains = self.iam.get_fixed_chains()
+			print(f'fixed_chains: {fixed_chains}')
+			interface_dG = self.iam.get_interface_dG()
+			print(f'InterfaceAnalyzerMover interface dG: {interface_dG}')
+			cenergy = self.iam.get_complex_energy()
+			print(f'Complex Energy: {cenergy}')
+			csasa = self.iam.get_complexed_sasa()
+			print(f'csasa: {csasa}')
+			dsasa = self.iam.get_interface_delta_sasa()
+			print(f'dsasa: {dsasa}')
+			interface_set = self.iam.get_interface_set()
+			print(f'interface_set: {interface_set}')
+		except Exception as e:
+			print(f'InterfaceAnalyzerMover diagnostics failed: {e}')
 		return score
 
 	def get_CRYST1(self,pdb):
@@ -301,20 +425,26 @@ class TELSetta:
 						p = re.compile(r'\d+\.\d+')
 						cryst1_vals = p.findall(line)
 						a, b, c, alpha, beta, gamma = [float(x) for x in cryst1_vals[0:6]]
-						print(f'PDB: {pdb}, CRYST1: {a, b, c}')
 						return (a, b, c, alpha, beta, gamma)
 
 	def add_CRYST1(self,new_pdb,old_pdb):
 		"""Copies CRYST1 data from the old_pdb into the new_pdb."""
-		with open (os.path.join(self.base,new_pdb),'r') as file:
-			pdb_sans_cryst = file.read()
-		with open(os.path.join(self.base,new_pdb),'w') as file:
-			with open(os.path.join(self.base,old_pdb)) as s:
-				for line in s:
-					if "CRYST1" in line:
-						file.write(line)
-						break
-			file.write(pdb_sans_cryst)
+		new_path = os.path.join(self.base,new_pdb)
+		old_path = os.path.join(self.base,old_pdb)
+		with open(new_path, 'r') as file:
+			pdb_lines = file.readlines()
+			new_cryst1 = next((line for line in pdb_lines if line.startswith("CRYST1")), None)
+		with open(old_path, 'r') as file:
+			cryst1 = next((line for line in file if line.startswith("CRYST1")), new_cryst1)
+
+		pdb_lines = [line for line in pdb_lines if not line.startswith("CRYST1")]
+		if cryst1 is not None:
+			insert_at = next((i for i, line in enumerate(pdb_lines)
+						  if line.startswith(("ATOM  ", "HETATM", "MODEL "))), len(pdb_lines))
+			pdb_lines.insert(insert_at, cryst1)
+
+		with open(new_path, 'w') as file:
+			file.writelines(pdb_lines)
 		
 	def change_cell(self,read_file,write_file,wa=None,wb=None,wc=None):
 		"""Copies the read_file PDB into a new write_file PDB at the given path, supplying it with an altered CRYST1 line as the user
@@ -347,10 +477,8 @@ class TELSetta:
 						file.write(line)
 
 	#Currently, this only works in space group P65, but that's not a problem for this code.
-	def rotate_file(self,old_file,rotated_file,deg):
-		"""Creates a rotated_file PDB from the old_file PDB after rotating it using apply_transform_Rx_plus_v.\n
-		Returns the rotated pose."""
-		deg_pose = pose_from_file(old_file)
+	def rotate_pose(self,pose,deg):
+		"""Rotates a pose about the global z-axis."""
 		theta = math.radians(deg)
 		R = xyzMatrix_double_t()
 		R.xx = math.cos(theta)
@@ -363,194 +491,19 @@ class TELSetta:
 		R.zy = 0.0
 		R.zz = 1.0
 		v = xyzVector_double_t(0.0, 0.0, 0.0) #No translation
-		deg_pose.apply_transform_Rx_plus_v(R, v)
-		deg_pose.dump_pdb(rotated_file)
-		return deg_pose
-	
-	def space_group_symmop_pose_from_pdb(self,pdb,symmop:str):
-		"""Performs a specified symmetry operator (symmop) on the entire pose, returning a symmop_pose clone of the original pose in the new location.\n
-		First, creates a pose from the passed pdb.\n
-		Then, gets the CRYST1 information, then performs a symmetry operation on the raw xyz locations of every atom in the pose using the CRYST1 information.\n
-		"""
-		symmop_pose = pose_from_file(pdb)
-		#Get Crystal Info:
-		cryst1 = self.get_CRYST1(pdb)
-		#print(f'CRYST1: {cryst1}')
-		#dir(symmop_pose.conformation())
-		#dir(symmop_pose.pdb_info())
-		#Do translation:
-		for res_i in range(1,symmop_pose.total_residue()+1):
-			res = symmop_pose.residue(res_i)
-			for atom_i in range(1,res.natoms()+1):
-				xyz = res.xyz(atom_i)
-				abc = ((xyz[0]+xyz[1]*math.tan(math.radians(30)))/cryst1[0],xyz[1]/math.cos(math.radians(30))/cryst1[1],xyz[2]/cryst1[2])
-				if symmop == "6":
-					#symmop6:
-					abc = (abc[1],-abc[0]+abc[1],(1/6)+abc[2])
-				elif symmop == "2":
-					#symmop2:
-					abc = (-abc[1],abc[0]-abc[1],(2/3)+abc[2])
-				elif symmop == "4+a":
-					#symmop4+a:
-					abc = (-abc[0]+1,-abc[1],1/2+abc[2])
-				xyz = xyzVector_double_t((abc[0]-abc[1]*math.sin(math.radians(30)))*cryst1[0],abc[1]*cryst1[1]*math.cos(math.radians(30)),abc[2]*cryst1[2])
-				symmop_pose.set_xyz(AtomID(atom_i,res_i),xyz)
-		return symmop_pose
-
-	def generate_minimal_contact_symmetry_mates(self,pdb,symmops):
-		"""Eventually, this function will access space_group_symmop_pose_from_pdb to create rotated and translated copies of a provided monomer such that all 
-		lattice contacts are being represented once, allowing refscilter to accurately score and optimize docked TFCs. For now, it simply calls on
-		generate_minimal_contact_symmetry_mates to create one chain per specified symmetry operation, then appends all the chains to one pose and returns
-		that combined pose, which is ready to be relaxed and analyzed by the InterfaceAnalyzerMover."""
-		#In the instance of the P65 space group, I'm interested in just two of the symmetry mates: the monomer directly above the root (n+1, or in 
-		#symmetry lingo, translate the unit cell across one a axis, then perform the sixth symmetry operation, (y,-x+y,1/6+x)) and the 
-		#monomer that's across from the root, in the next polymer over (in symmetry lingo, the second symmetry operation from the root chain).
-		symmop_poses = []
-		pose = pose_from_file(pdb)
-		for symmop in symmops:
-			symmop_pose = self.space_group_symmop_pose_from_pdb(pdb,symmop)
-			symmop_poses.append(symmop_pose)
-		for symmop_pose in symmop_poses:
-			append_pose_to_pose(pose,symmop_pose,new_chain=True)
-		pdbinfo = pose.pdb_info()
-		chain_letters = ["A", "B", "C"]
-		for chain_num in range(1, pose.num_chains()+1):
-			letter = chain_letters[chain_num-1]
-			for res in range(
-				pose.chain_begin(chain_num),
-				pose.chain_end(chain_num)+1
-			):
-				pdbinfo.chain(res, letter)
+		pose.apply_transform_Rx_plus_v(R, v)
 		return pose
-
-	def fill_unit_cell(pose,a,b,c):
-		if pose=="P65":
-			pass
-
-	def refscilter(self,symm_pose,er_cutoff,current_pdb,last_pdb,scored_file_name) -> bool:
-		"""OVERVIEW: self.refscilter refines and scores the symmetric pose and compares the score to the min_score*er_cutoff, 
-		then determines whether to update the min_score_pdb or not with the current PDB.\n
-		It updates the scores_file with the final min_score_pdb of any given setting.\n
-		It removes unneeded files (such as the previous min_score_pdb, as it is no longer the min_score_pdb, and is probably not of interest?).\n
-		It returns a boolean reporting whether the current PDB exceeded the er_cutoff (True if exceeded). The intent is that TELSetta will then
-		respond appropriately, either by grabbing the previously-set min_score_pdb to further refine it, or ending the program and returning the final
-		best-scoring PDB file.\n
-		STEP-BY-STEP:\n
-		score is set to self.interface_refine(symm_pose). Note that if the interface_refinement fails, a non-interfaced refinement will automatically follow.
-		BRANCH: The rest of this function is split into a branch that deals with interfaced poses and a branch that deals with non-interfaced poses. Essentially,
-		they write their scores to different score files and compare to different minimum scores, since interfaced and non-interfaced poses have vastly different
-		scoring behaviors (interfaced poses have small scores, whether negative or positive, while non-interfaced poses usually have large scores, whether
-		negative or positive).\n
-		if the local_min_score_pdb has not been assigned, append a note about which current_pdb is being assessed into the scores file, along with its score,
-		then also add information about that pdb's specific settings (linker, unit cell size, degree of rotation and score) to an internal Python list so that 
-		a figure may be made later on.\n
-		Push the pose to PyMOL.
-		If the score is negative or positive but less than the absolute value of the current minimum score*the specified er_cutoff, and if the last PDB was not
-		the minimum-scoring one, delete the last PDB.\n
-		If the score is less than the previous one, reassign the local_min_score and the local_min_score_pdb to the current score and pdb.\n
-		If the score is more positive than the cutoff value previously specified, then return TRUE (as in, yes, the current PDB exceeds the cutoff)
-		Otherwise, return FALSE (as in, no, the current PDB is still potentially within the same energy well as the previous local_min_score_pdb).\n
-		NOTE: this algorithm assumes AT LEAST three things:\n
-		1) that we are testing unit cell size and chain positioning with sufficient range and granularity to identify all energy wells within the landscape (critical)\n
-		2) that the global minimum is contiguous with at least one of the local minima (haha, if not, that would be crazy)\n
-		3) that the height (above 0) of any given energy well (from an interfaced pose or not) is as great as its depth (below 0), which is likely not true,
-		but I have no idea how I would actually determine a fair cutoff, so I've given the filtering algorithm a lot of leeway. Essentially, that just means that
-		we test far more poses than should be necessary to identify a likely global minimum.
-		"""
-		score = self.interface_refine(symm_pose)
-		"""
-		sequence = symm_pose.sequence()
-		with open (f'{current_pdb.removesuffix('.pdb')}.fasta', 'w') as f:
-			f.write(">"+current_pdb+", score (REU): "+"{:.3e}".format(score)+"\n"+"HHHHHHHHHH"+str(sequence).strip('X'))
-		self.add_CRYST1(os.path.basename(current_pdb),os.path.basename(current_pdb))
-		"""
-		print(f'minimum score and PDB: {self.local_min_score}, {self.local_min_score_pdb}, current score and PDB: {score}, {current_pdb}')
-		if self.interfaced:
-			scores_file = os.path.join(self.base,f'interfaced_scores_file.txt')
-			if self.local_min_score_pdb!=None:
-				with open(scores_file,'a') as scores:
-					scores.write(f'{scored_file_name}: {current_pdb}\n')
-					scores.write(f'Score: {score}\n')
-					specs = str(current_pdb).split("_")
-					for spec in range(len(specs)):
-						if str(os.path.join(self.base,f'{self.TELSAM_version}--{self.client_pdb}')) in specs[spec]:
-							if len(specs)==spec+4:
-								self.interfaced_energies_vs_ucab_vs_deg['linker'].append(int(specs[spec+1]))
-								self.interfaced_energies_vs_ucab_vs_deg["ucab"].append(int(specs[spec+2]))
-								self.interfaced_energies_vs_ucab_vs_deg["deg"].append(int(specs[spec+3].removesuffix(".pdb")))
-								self.interfaced_energies_vs_ucab_vs_deg['energy'].append(float(score))
-			symm_pose.pdb_info().name("pmm")
-			self.pmm.apply(symm_pose)
-			if score<0 or 0<score<=abs(self.local_min_score)*er_cutoff:
-				if score<self.local_min_score:
-					#Add these lines back in if you no longer want to see all the previous minimum-scoring PDBs
-					#if self.local_min_score_pdb!=None:
-					#	os.remove(self.local_min_score_pdb)
-					self.local_min_score = score
-					self.local_min_score_pdb = current_pdb
-				if last_pdb!=None:
-					if os.path.exists(last_pdb) and last_pdb!= self.local_min_score_pdb:
-						os.remove(last_pdb)
-						print(f'removed previous pdb: {last_pdb}')
-				print(f'New minimum score and PDB: {self.local_min_score}, {self.local_min_score_pdb}')
-				return (False)
-			else:
-				if last_pdb!=None:
-					if os.path.exists(last_pdb) and last_pdb!= self.local_min_score_pdb:
-						os.remove(last_pdb)
-				#if os.path.exists(current_pdb) and current_pdb!=self.local_min_score_pdb:
-				#	os.remove(current_pdb)#This may cause issues...
-				print(f'New minimum score and PDB: {self.local_min_score}, {self.local_min_score_pdb}')
-				return (True)
-		else:
-			scores_file = os.path.join(self.base,f'scores_file.txt')
-			if self.local_min_score_pdb!=None:
-				with open(scores_file,'a') as scores:
-					scores.write(f'{scored_file_name}: {current_pdb}\n')
-					scores.write(f'Score: {score}\n')
-					specs = str(current_pdb).split("_")
-					for spec in range(len(specs)):
-						if str(os.path.join(self.base,f'{self.TELSAM_version}--{self.client_pdb}')) in specs[spec]:
-							if len(specs)==spec+4:
-								self.energies_vs_ucab_vs_deg['linker'].append(int(specs[spec+1]))
-								self.energies_vs_ucab_vs_deg["ucab"].append(int(specs[spec+2]))
-								self.energies_vs_ucab_vs_deg["deg"].append(int(specs[spec+3].removesuffix(".pdb")))
-								self.energies_vs_ucab_vs_deg['energy'].append(float(score))
-			symm_pose.pdb_info().name("pmm")
-			self.pmm.apply(symm_pose)
-			if score<0 or 0<score<=abs(self.local_min_score)*er_cutoff:
-				if score<self.local_min_score:
-					#Add these lines back in if you no longer want to see all the previous minimum-scoring PDBs
-					#if self.local_min_score_pdb!=None:
-					#	os.remove(self.local_min_score_pdb)
-					self.local_min_score = score
-					self.local_min_score_pdb = current_pdb
-				if last_pdb!=None:
-					if os.path.exists(last_pdb) and last_pdb!= self.local_min_score_pdb:
-						os.remove(last_pdb)
-						print(f'removed previous pdb: {last_pdb}')
-				print(f'New minimum score and PDB: {self.local_min_score}, {self.local_min_score_pdb}')
-				return (False)
-			else:
-				if last_pdb!=None:
-					if os.path.exists(last_pdb) and last_pdb!= self.local_min_score_pdb:
-						os.remove(last_pdb)
-				#if os.path.exists(current_pdb) and current_pdb!=self.local_min_score_pdb:
-				#	os.remove(current_pdb)#This may cause issues...
-				print(f'New minimum score and PDB: {self.local_min_score}, {self.local_min_score_pdb}')
-				return (True)
 		
 	def chart(self,linker:int):
 		"""Primarily makes a heat map of energies related to unit cell ab and degree of rotation for each linker length variant.\n
 		Can also be used to make a 3d graph of the relationship between energy, unit cell ab, and degree for each linker length variant.\n
-		The information this function pulls from is owned by TELSetta and populated by TELSetta.refscilter.\n
 		Relies heavily on matplotlib.
 		"""
 		fig = plt.figure()
 		data = {
-			"aboi":[ucab for ucab, l in zip(self.energies_vs_ucab_vs_deg['ucab'],self.energies_vs_ucab_vs_deg['linker']) if l == linker],
-			"doi":[deg for deg, l in zip(self.energies_vs_ucab_vs_deg['deg'],self.energies_vs_ucab_vs_deg['linker']) if l == linker],
-			"eoi":[energy for energy, l in zip(self.energies_vs_ucab_vs_deg['energy'],self.energies_vs_ucab_vs_deg['linker']) if l == linker]
+			"aboi":[ucab for ucab, l in zip(self.interfaced_energies_vs_ucab_vs_deg['ucab'],self.interfaced_energies_vs_ucab_vs_deg['linker']) if l == linker],
+			"doi":[deg for deg, l in zip(self.interfaced_energies_vs_ucab_vs_deg['deg'],self.interfaced_energies_vs_ucab_vs_deg['linker']) if l == linker],
+			"eoi":[energy for energy, l in zip(self.interfaced_energies_vs_ucab_vs_deg['energy'],self.interfaced_energies_vs_ucab_vs_deg['linker']) if l == linker]
 		}
 		lookup = {
 			(a,d): e
@@ -578,22 +531,20 @@ class TELSetta:
 			for j in range(len(aboi_set_list)):
 				text = ax.text(j,i,"{:.3e}".format(energy_array[i,j]),
 				   ha='center',va='center',color='w')
-		ax.set_title(f'Energies of AB:Degree Combinations for {self.TELSAM_version}--{self.client_pdb}_{linker}')
-		fig.savefig(os.path.join(self.base,f"Energies of AB_Degree Combinations for {self.TELSAM_version}--{self.client_pdb}_{linker}"))
+		ax.set_title(f'Energies of UCAB:Degree Combinations for {self.TELSAM_version}--{self.client_pdb}_{linker}')
+		fig.savefig(os.path.join(self.base,f"Energies of UCAB_Degree Combinations for {self.TELSAM_version}--{self.client_pdb}_{linker}"))
 		with open(os.path.join(self.base,f"{linker}_chart.json"),"w") as file:
 			json.dump(data,file,indent=4)
-
-		"""
-		print(data["aboi"][::],data["doi"][::],data["eoi"][::])
+		
+		#print(data["aboi"][::],data["doi"][::],data["eoi"][::])
 		ax = fig.add_subplot(projection='3d')
 		ax.scatter(data["aboi"],data["doi"],data["eoi"])
-		ax.set_title(f'Energies of AB:Degree Combinations for {self.TELSAM_version}--{self.client_pdb}_{linker}')
+		ax.set_title(f'Energies of UCAB:Degree Combinations for {self.TELSAM_version}--{self.client_pdb}_{linker}')
 		ax.set_xlabel('Unit Cell AB Length (Angstroms)')
 		ax.set_ylabel('Degree of Polymer Rotation (Degrees)')
 		ax.set_zlabel('Energy (REU)')
-		fig.savefig(os.path.join(self.base,f"Energies of AB_Degree Combinations for {self.TELSAM_version}--{self.client_pdb}_{linker}"))
+		fig.savefig(os.path.join(self.base,f"Energies of UCAB_Degree Combinations for {self.TELSAM_version}--{self.client_pdb}_{linker}"))
 		plt.close(fig)
-		"""
 
 	def remake_TELSAM(self):
 		if os.path.exists(os.path.join(self.base,f'TELSAM_in_9DOC.pdb')):
@@ -606,6 +557,7 @@ class TELSetta:
 		cleanATOM(os.path.join(self.base,"ETEL.pdb"))
 		os.remove(os.path.join(self.base,"ETEL.pdb"))
 
+		
 		#Get 9DOC from the pdb (it has the proper space group that TELSAM usually fits into)
 		url = f"https://files.rcsb.org/download/9DOC.pdb"
 		pdb_text = requests.get(url,headers=self.headers).text
@@ -635,29 +587,31 @@ class TELSetta:
 		superimpose_pose(TELSAM_in_9DOC,S_pose,atom_map)
 		mutate_residue(TELSAM_in_9DOC,34,"R",5)
 		mutate_residue(TELSAM_in_9DOC,66,"E",5)
-		"""
-		####################################### EXTEND HELIX ###############################################
-		helix_extender = Pose()
-		#Grab the last 11 residues in TELSAM:
-		append_subpose_to_pose(helix_extender,TELSAM_in_9DOC,TELSAM_in_9DOC.chain_end(1)-10,TELSAM_in_9DOC.chain_end(1))
-		#Align those residues to the end of the helix over 4 amino acids (effectively copying the helix and shifting it over on top of itself)
-		T_residues_to_superimpose = range(TELSAM_in_9DOC.chain_end(1)-3,TELSAM_in_9DOC.chain_end(1)+1)
-		H_residues_to_superimpose = range(helix_extender.chain_begin(1),helix_extender.chain_begin(1)+4)
-		helix_atom_map = AtomID_Map()
-		initialize_atomid_map(helix_atom_map, helix_extender, AtomID())
-		for HR, TR in zip(H_residues_to_superimpose,T_residues_to_superimpose):
-			H_atom = AtomID(helix_extender.residue(HR).atom_index("CA"), HR)
-			T_atom = AtomID(TELSAM_in_9DOC.residue(TR).atom_index("CA"), TR)
-			helix_atom_map.set(H_atom,T_atom)
-		superimpose_pose(helix_extender,TELSAM_in_9DOC,helix_atom_map)
 
-		#Delete 4-aa overlap
-		delete_region(TELSAM_in_9DOC,TELSAM_in_9DOC.chain_end(1)-3,TELSAM_in_9DOC.chain_end(1))
-		#Fuse
-		append_pose_to_pose(TELSAM_in_9DOC,helix_extender,new_chain=False)
-		TELSAM_in_9DOC.conformation().declare_chemical_bond(TELSAM_in_9DOC.chain_end(1)-helix_extender.total_residue(),"C",TELSAM_in_9DOC.chain_end(1)-helix_extender.total_residue()+1,"N")
-		"""
+		if self.linker_variant>=16:
+			####################################### EXTEND HELIX ###############################################
+			#Extend TELSAM's helix by 7 amino acids.
+			helix_extender = Pose()
+			#Grab the last 11 residues in TELSAM:
+			append_subpose_to_pose(helix_extender,TELSAM_in_9DOC,TELSAM_in_9DOC.chain_end(1)-10,TELSAM_in_9DOC.chain_end(1))
+			#Align those residues to the end of the helix over 4 amino acids (effectively copying the helix and shifting it over on top of itself)
+			T_residues_to_superimpose = range(TELSAM_in_9DOC.chain_end(1)-3,TELSAM_in_9DOC.chain_end(1)+1)
+			H_residues_to_superimpose = range(helix_extender.chain_begin(1),helix_extender.chain_begin(1)+4)
+			helix_atom_map = AtomID_Map()
+			initialize_atomid_map(helix_atom_map, helix_extender, AtomID())
+			for HR, TR in zip(H_residues_to_superimpose,T_residues_to_superimpose):
+				H_atom = AtomID(helix_extender.residue(HR).atom_index("CA"), HR)
+				T_atom = AtomID(TELSAM_in_9DOC.residue(TR).atom_index("CA"), TR)
+				helix_atom_map.set(H_atom,T_atom)
+			superimpose_pose(helix_extender,TELSAM_in_9DOC,helix_atom_map)
 
+			#Delete 4-aa overlap
+			delete_region(TELSAM_in_9DOC,TELSAM_in_9DOC.chain_end(1)-3,TELSAM_in_9DOC.chain_end(1))
+			#Fuse
+			append_pose_to_pose(TELSAM_in_9DOC,helix_extender,new_chain=False)
+			TELSAM_in_9DOC.conformation().declare_chemical_bond(TELSAM_in_9DOC.chain_end(1)-helix_extender.total_residue(),"C",TELSAM_in_9DOC.chain_end(1)-helix_extender.total_residue()+1,"N")
+			mutate_residue(TELSAM_in_9DOC,90,"A",5)
+			mutate_residue(TELSAM_in_9DOC,92,"K",5)
 		TELSAM_in_9DOC.dump_pdb(os.path.join(self.base,f'TELSAM_in_9DOC.pdb'))
 		last_size = -1
 		while True:
@@ -670,7 +624,6 @@ class TELSetta:
 		self.add_CRYST1(f'TELSAM_in_9DOC.pdb',f'STEL.pdb')
 		if os.path.exists(os.path.join(self.base,"STEL.pdb")):
 			os.remove(os.path.join(self.base,"STEL.pdb"))
-		print(f'Remade TELSAM. Stored in: {self.base}')
 
 	def validate_TELSAM(self):
 		if self.remake_TELSAM_bool:
@@ -695,30 +648,39 @@ class TELSetta:
 				pdb_text = requests.get(url,headers=self.headers).text
 				with open(os.path.join(self.base,f"{self.client_pdb}.pdb"),"w") as file:
 					file.write(pdb_text)
+			else:
+				client_path = self.client_pdb
+				self.client_pdb = os.path.basename(client_path)
+				subprocess.run(["cp",client_path,os.path.join(self.base,f"{self.client_pdb}.pdb")],check=True)
 			cleanATOM(os.path.join(self.base,f"{self.client_pdb}.pdb"))
-			temp_pose = Pose()
-			pose_from_pdb(temp_pose,os.path.join(self.base,f"{self.client_pdb}.clean.pdb"))
+			temp_pose = pose_from_pdb(os.path.join(self.base,f"{self.client_pdb}.clean.pdb"))
 			os.remove(os.path.join(self.base,f"{self.client_pdb}.pdb"))
 			os.remove(os.path.join(self.base,f"{self.client_pdb}.clean.pdb"))
 			
-			#Extract first 4-aa helical region from target protein to fuse to TELSAM:
-			dssp = Dssp(temp_pose)
-			dssp.insert_ss_into_pose(temp_pose)
-			ss_string = temp_pose.secstruct()
-			first_helix = ss_string.find("HHHHH")
-			append_subpose_to_pose(self.client,temp_pose,temp_pose.chain_begin(1)+first_helix,temp_pose.chain_end(1))
-			
+			if self.client_start_residue is None:
+				#Extract first 4-aa helical region from target protein to fuse to TELSAM:
+				dssp = Dssp(temp_pose)
+				dssp.insert_ss_into_pose(temp_pose)
+				ss_string = temp_pose.secstruct()
+				first_helix = ss_string.find("HHHHH")
+				append_subpose_to_pose(self.client,temp_pose,temp_pose.chain_begin(1)+first_helix,temp_pose.chain_end(1))
+			else:
+				append_subpose_to_pose(self.client,temp_pose,temp_pose.chain_begin(1)+self.client_start_residue-1,temp_pose.chain_end(1))
+			client_start = self.client.chain_begin(1)
+			if self.client.residue(client_start).has_variant_type(rosetta.core.chemical.LOWERTERM_TRUNC_VARIANT):
+				rosetta.core.pose.remove_variant_type_from_pose_residue(
+					self.client,
+					rosetta.core.chemical.LOWERTERM_TRUNC_VARIANT,
+					client_start,
+				)
 			#Align the two helices:
-			self.start_residue_to_superimpose = 3
 			if os.path.exists(os.path.join(self.base,f'scores_file.txt')):
 				os.remove(os.path.join(self.base,f'scores_file.txt'))
 			if os.path.exists(os.path.join(self.base,f'interfaced_scores_file.txt')):
 				os.remove(os.path.join(self.base,f'interfaced_scores_file.txt'))
 			self.TELSAM = self.TELSAM_in_9DOC.clone()
-			if self.linker_variant!=None:
-				self.start_residue_to_superimpose+=self.linker_variant
-			else:
-				self.linker_variant = 1+self.start_residue_to_superimpose
+			self.start_residue_to_superimpose-=self.linker_variant
+			self.TELSAM_module_end = self.TELSAM.chain_end(1)-self.start_residue_to_superimpose-1
 			TELSAM_residues_to_superimpose = range(self.TELSAM.chain_end(1)-self.start_residue_to_superimpose,self.TELSAM.chain_end(1)-self.start_residue_to_superimpose+3)
 			client_residues_to_superimpose = range(1,4)
 			atom_map = AtomID_Map()
@@ -736,12 +698,13 @@ class TELSetta:
 			#Fuse
 			append_pose_to_pose(self.TELSAM,self.client,new_chain=False)
 			self.TELSAM.conformation().declare_chemical_bond(self.TELSAM.chain_end(1)-self.client.total_residue(),"C",self.TELSAM.chain_end(1)-self.client.total_residue()+1,"N")
+			self.add_coordinate_constraints(self.TELSAM)
 
 			#Refine
 			movemap = MoveMap()
 			movemap.set_bb(False)
 			movemap.set_chi(False)
-			for i in range(self.TELSAM.chain_end(1)-self.client.total_residue()-self.start_residue_to_superimpose,self.TELSAM.chain_end(1)):
+			for i in range(self.TELSAM.chain_end(1)-self.client.total_residue()-self.start_residue_to_superimpose,self.TELSAM.chain_end(1)+1):
 				movemap.set_bb(i, True)
 				movemap.set_chi(i, True)
 			#Refine gently
@@ -750,6 +713,8 @@ class TELSetta:
 			self.min_mover.apply(self.TELSAM)
 			self.relax.set_movemap(movemap)
 			self.relax.apply(self.TELSAM)
+			if not self.passes_fa_rep_filter(self.TELSAM):
+				raise RuntimeError("Initial fusion rejected by the fa_rep filter")
 
 			#Realign to 9DOC at the polymer extension interface
 			TELSAM_residues_to_superimpose = [2,30,31,32,34,53,57,62,65,69]
@@ -762,10 +727,10 @@ class TELSetta:
 			superimpose_pose(self.TELSAM_in_9DOC,self.TELSAM,atom_map)
 
 			#Save so you can extract the furthest_x coordinate and refine correctly
-			self.current_linker_pdb = os.path.join(self.base,f'{self.TELSAM_version}--{self.client_pdb}_{self.linker_variant}.pdb')
-			self.TELSAM.dump_pdb(self.current_linker_pdb)
-			self.add_CRYST1(os.path.basename(self.current_linker_pdb),os.path.basename("TELSAM_in_9DOC.pdb"))
-			with open(self.current_linker_pdb, 'r') as file:
+			self.linker_pdb = os.path.join(self.base,f'{self.TELSAM_version}--{self.client_pdb}_{self.linker_variant}.pdb')
+			self.TELSAM.dump_pdb(self.linker_pdb)
+			self.add_CRYST1(os.path.basename(self.linker_pdb),os.path.basename("TELSAM_in_9DOC.pdb"))
+			with open(self.linker_pdb, 'r') as file:
 				lines = iter(file)
 				for line in lines:
 					if 'CRYST1' in line:
@@ -782,117 +747,147 @@ class TELSetta:
 			if score<10000:
 				#Record self.base score of linker variant:
 				with open(os.path.join(self.base,f'scores_file.txt'),'a') as scores:
-					scores.write(f'Linker file: {self.current_linker_pdb}\n')
+					scores.write(f'Linker file: {self.linker_pdb}\n')
 					scores.write(f'score: {score}\n')
-					#Determine largest unit cell:
-			
+					pdb_path = os.path.join(self.base,f'{self.TELSAM_version}--{self.client_pdb}_{self.linker_variant}.pdb')
+					sequence = self.TELSAM.sequence()	
+					with open (f'{pdb_path.removesuffix('.pdb')}.fasta', 'w') as f:
+						f.write(">"+pdb_path+", score (REU): "+"{:.3e}".format(score)+"\n"+"HHHHHHHHHH"+str(sequence).strip('X'))
+			self.TELSAM.pdb_info().name("Fusion")
+			self.pmm.apply(self.TELSAM)
+			self.pmm.send_energy(self.TELSAM)
+
 		except Exception as e:
 			print(e,file=sys.stderr)
 			sys.exit()
 
-	def stepper(self):
-		######################################## DOCK POLYMERS! ######################################
-		#Test different unit cell sizes:
-		self.local_min_score = 200000
-		self.local_min_score_pdb = None
-		min_ucab_pdb = None
-		ucab_start = None
-		ucab_end = None
-		ucab1 = None
-		if self.optimize:
-			if self.unit_cell_ab!=None:
-				ucab_start = int(self.unit_cell_ab)
-				ucab_end = int(self.unit_cell_ab-30)
+	###This is where I'm replacing the decision tree with Monte Carlo methodology.
+	def monte_carlo_interface_minimization(self):
+		"""monte_carlo_interface_minimization runs a Monte Carlo algorithm to change the degree of rotation of the pose\
+		about the unit cell C-axis and to change the distance between subunits by altering the unit cell AB distance.\
+		It does this semi-randomly, with a gaussian step in degree of rotation (centered around 0, st.dev of 10)\
+		(many rotations can be tested, and they are tested widely, with little preference for one or another),\
+		and a gaussian step in unit cell size (centered around -2.5, st. dev 10) (most attempts are to shrink the unit cell)\n
+		Currently, the kT of this Monte Carlo method is set at 3.3. Notably, the method is not foolproof. If the lowest achievable energy is relatively\
+		close to higher interfaced energies, you will not be able to isolate it. It is not unusual for the score to dip and rise continuously, unless\
+		a clear energy well can be accessed and the gaussian steps and kT are small enough to limit the pose's movement to the inside of that energy well."""
+		ucab = self.get_CRYST1(self.linker_pdb)[0]
+		symm_pose = None
+		for u_sample in range(15):
+			test_ucab = round(ucab + random.gauss(-5,5),3)
+			ucab_pdb = os.path.join(self.base,f'{self.TELSAM_version}--{self.client_pdb}_{self.linker_variant}_{test_ucab}.pdb')
+			self.change_cell(self.linker_pdb,ucab_pdb,wa=test_ucab,wb=test_ucab)
+			symm_pose = pose_from_pdb(ucab_pdb)
+			makesym = SetupForSymmetryMover("CRYST1")
+			makesym.apply(symm_pose)
+			self.add_coordinate_constraints(symm_pose)
+			deg = 0
+			starting_energy = self.interface_refine(symm_pose)#this has to come before self.interfaced, because it changes self.interfaced based on whether the interface scoring works.
+			if not self.passes_fa_rep_filter(symm_pose):
+				ucab=ucab+3
+				u_sample = u_sample-1
+				symm_pose.pdb_info().name("failed_ucab_pose")
+				self.pmm.apply(symm_pose)
+				self.pmm.send_energy(symm_pose)
+				continue
+			if self.interfaced:
+				for d_sample in range(4):
+					test_deg = deg + random.gauss(0,10)
+					symm_pose = pose_from_pdb(ucab_pdb)
+					symm_pose.pdb_info().name("pmm")
+					self.rotate_pose(symm_pose,test_deg)
+					makesym = SetupForSymmetryMover("CRYST1")
+					makesym.apply(symm_pose)
+					self.add_coordinate_constraints(symm_pose)
+					energy = self.interface_refine(symm_pose)#this has to come before self.interfaced, because it changes self.interfaced based on whether the interface scoring works.
+					if not self.passes_fa_rep_filter(symm_pose):
+						symm_pose.pdb_info().name("failed_degree_pose")
+						self.pmm.apply(symm_pose)
+						self.pmm.send_energy(symm_pose)
+						d_sample = d_sample-1
+						continue
+					symm_pose.dump_pdb(os.path.join(self.base,f'{self.TELSAM_version}--{self.client_pdb}_{self.linker_variant}_{test_ucab}_{test_deg}_symmetric.pdb'))
+					self.compare_native(symm_pose=symm_pose)
+					if self.interfaced:
+						self.pmm.apply(symm_pose)
+						self.pmm.send_energy(symm_pose)
+						delta_e = energy - self.scores[self.interfaced]
+						if delta_e<=0 or random.random()<math.exp(-delta_e/3.3):
+							self.min_score_pdbs[self.interfaced] = os.path.join(self.base,f'{self.TELSAM_version}--{self.client_pdb}_{self.linker_variant}_{test_ucab}_{test_deg}.pdb')
+							self.scores[self.interfaced] = energy
+							ucab = test_ucab
+							deg = test_deg
+							#RECORD FOR LATER
+							self.interfaced_energies_vs_ucab_vs_deg['linker'].append(int(self.linker_variant))
+							self.interfaced_energies_vs_ucab_vs_deg["ucab"].append(int(float(test_ucab)))
+							self.interfaced_energies_vs_ucab_vs_deg["deg"].append(int(float(test_deg)))
+							self.interfaced_energies_vs_ucab_vs_deg['energy'].append(float(energy))
+							scores_file = self.scores_files[self.interfaced]
+							with open(scores_file,'a') as scores:
+								scores.write(f'{self.linker_variant}_{test_ucab}_{test_deg}\n')
+								scores.write(f'Score: {energy}\n')
+					else:
+						symm_pose.pdb_info().name("failed_interface_pose")
+						self.pmm.apply(symm_pose)
+						self.pmm.send_energy(symm_pose)
+						d_sample = d_sample-1
 			else:
-				ucab_start = int(self.furthest_x*2)
-				ucab_end = int(self.furthest_x*2-30)
-			if self.degree_rotation!=None:
-				deg_start = self.degree_rotation
-				deg_end = self.degree_rotation+20
-			else:
-				deg_start = 1
-				deg_end = 21
-		else:
-			ucab_start = int(self.furthest_x*2)
-			ucab_end = int(self.furthest_x*2-30)
-			deg_start = 1
-			deg_end = 21
+				u_sample = u_sample-1
+		return symm_pose
+		#self.chart(self.linker_variant)
 
-		for ucab in range(ucab_start,ucab_end,-1):
-			current_ucab_pdb = os.path.join(self.base,f'{self.TELSAM_version}--{self.client_pdb}_{self.linker_variant}_{ucab}.pdb')
-			self.change_cell(self.current_linker_pdb,current_ucab_pdb,wa=ucab,wb=ucab)
-			symm_pose = self.generate_minimal_contact_symmetry_mates(current_ucab_pdb,("4+a",))
-			exceeded = self.refscilter(symm_pose,1.1,current_ucab_pdb,os.path.join(self.base,f'{self.TELSAM_version}--{self.client_pdb}_{self.linker_variant}_{ucab+1}.pdb'),'Unit Cell AB File')
-			if exceeded:
-				if self.local_min_score_pdb != None:
-					min_ucab_pdb = self.local_min_score_pdb
-					ucab1 = int(str(min_ucab_pdb).split("_")[-1].removesuffix(".pdb"))
-				break
-		min_ucab_pdb = self.local_min_score_pdb
-		ucab1 = int(str(min_ucab_pdb).split("_")[-1].removesuffix(".pdb"))
-		##################################### ROTATE UNIT CELL AND CONTINUE DOCKING! ###############################
-		if min_ucab_pdb!=None:
-			print(f'min_ucab_pdb: {min_ucab_pdb}')
-			ucab = ucab1
-			self.interfaced = False
-			self.local_min_score = 200000
-			self.local_min_score_pdb = None
-			for deg in range(deg_start-1,deg_end):
-				for ucab2 in range(ucab,ucab_end,-1):
-					current_ucab2_deg_pdb = os.path.join(self.base,f'{min_ucab_pdb.removesuffix(f"{ucab1}.pdb")}{ucab2}_{deg}.pdb')
-					self.change_cell(min_ucab_pdb,current_ucab2_deg_pdb,wa=ucab2,wb=ucab2)
-					self.rotate_file(current_ucab2_deg_pdb,deg)
-					symm_pose = self.generate_minimal_contact_symmetry_mates(current_ucab2_deg_pdb,("4+a",))
-					exceeded = self.refscilter(symm_pose,1.1,current_ucab2_deg_pdb,os.path.join(self.base,f'{min_ucab_pdb.removesuffix(f"{ucab1}.pdb")}_{ucab2+1}_{deg}.pdb'),'Temp Unit Cell AB2 Deg File')
-					if exceeded:
-						ucab = ucab2
-						break
-				exceeded = self.refscilter(symm_pose,3,current_ucab2_deg_pdb,None,'Unit Cell AB2 Deg File')
-				#EITHER leave this alone (meaning you will always test all the degrees in the range) OR calculate the angle between the linker vector and
-				#the furthest edge of the linker, because that angle has to be the starter angle for whichever degree check is opposite
-				#that angle (since proceeding by just 1 degree in the opposing direction will cause the edge of the linker to continually bump and increase
-				#in energy)
+	def exhaustive_search(self):
+		ucab = self.get_CRYST1(self.linker_pdb)[0]
+		symm_pose = None
+		for ucab in range(self.furthest_x*2,self.furthest_x*2-30,-1):
+			ucab_pdb = os.path.join(self.base,f'{self.TELSAM_version}--{self.client_pdb}_{self.linker_variant}_{ucab}.pdb')
+			self.change_cell(self.linker_pdb,ucab_pdb,wa=ucab,wb=ucab)
+			symm_pose = pose_from_pdb(ucab_pdb)
+			makesym = SetupForSymmetryMover("CRYST1")
+			makesym.apply(symm_pose)
+			self.add_coordinate_constraints(symm_pose)
+			starting_energy = self.interface_refine(symm_pose)#this has to come before self.interfaced, because it changes self.interfaced based on whether the interface scoring works.
 
-			ucab = ucab1
-			self.interfaced = False
-			self.local_min_score = 200000
-			self.local_min_score_pdb = None
-			for deg in range(-deg_start,-deg_end,-1):
-				for ucab2 in range(ucab,ucab_end,-1):
-					current_ucab2_deg_pdb = os.path.join(self.base,f'{min_ucab_pdb.removesuffix(f"{ucab1}.pdb")}{ucab2}_{deg}.pdb')
-					self.change_cell(min_ucab_pdb,current_ucab2_deg_pdb,wa=ucab2,wb=ucab2)
-					self.rotate_file(current_ucab2_deg_pdb,deg)
-					symm_pose = self.generate_minimal_contact_symmetry_mates(current_ucab2_deg_pdb,("4+a",))
-					exceeded = self.refscilter(symm_pose,1.1,current_ucab2_deg_pdb,os.path.join(self.base,f'{min_ucab_pdb.removesuffix(f"{ucab1}.pdb")}_{ucab2+1}_{deg}.pdb'),'Temp Unit Cell AB2 Deg File')
-					if exceeded:
-						ucab = ucab2 #This assumes that client proteins are not too concave (pointing in toward the polymer vector)
-						break
-				exceeded = self.refscilter(symm_pose,3,current_ucab2_deg_pdb,None,'Unit Cell AB2 Deg File')
-			
-			self.chart(self.linker_variant)
 
 	def picker(self):
-		current_ucab_pdb = os.path.join(self.base,f'{self.TELSAM_version}--{self.client_pdb}_{self.linker_variant}_{str(int(float(self.unit_cell_ab)))}.pdb')
-		self.change_cell(self.current_linker_pdb,current_ucab_pdb,wa=self.unit_cell_ab,wb=self.unit_cell_ab)
-		self.rotate_file(current_ucab_pdb,self.degree_rotation)
-		symm_pose = self.generate_minimal_contact_symmetry_mates(current_ucab_pdb,("4+a",))
+		ucab_pdb = os.path.join(self.base,f'{self.TELSAM_version}--{self.client_pdb}_{self.linker_variant}_{str(int(float(self.unit_cell_ab)))}.pdb')
+		self.change_cell(self.linker_pdb,ucab_pdb,wa=self.unit_cell_ab,wb=self.unit_cell_ab)
+		symm_pose = pose_from_file(ucab_pdb)
+		self.rotate_pose(symm_pose,self.degree_rotation)
 		sequence = symm_pose.sequence()
 		self.interface_refine(symm_pose)
 		score = self.sf(symm_pose)
-		print(f'Score of {current_ucab_pdb}: {score}')
-		with open (f'{current_ucab_pdb.removesuffix('.pdb')}.fasta', 'w') as f:
-			f.write(">"+current_ucab_pdb+", score (REU): "+"{:.3e}".format(score)+"\n"+"HHHHHHHHHH"+str(sequence).strip('X'))
-		self.add_CRYST1(os.path.basename(current_ucab_pdb),os.path.basename(current_ucab_pdb))
+		with open (f'{ucab_pdb.removesuffix('.pdb')}.fasta', 'w') as f:
+			f.write(">"+ucab_pdb+", score (REU): "+"{:.3e}".format(score)+"\n"+"HHHHHHHHHH"+str(sequence).strip('X'))
+		self.add_CRYST1(os.path.basename(ucab_pdb),os.path.basename(ucab_pdb))
 		symm_pose.pdb_info().name("pmm")
 		self.pmm.apply(symm_pose)
+		self.pmm.send_energy(symm_pose)
 		self.chart(self.linker_variant)
+
+	def compare_native(self, symm_pose):
+		if self.native_PDB is None:
+			print("No native PDB provided for comparison.")
+			return
+
+		url = f"https://files.rcsb.org/download/{self.native_PDB}.pdb"
+		pdb_text = requests.get(url,headers=self.headers).text
+		with open(os.path.join(self.base,f"{self.native_PDB}.pdb"),"w") as file:
+			file.write(pdb_text)
+		cleanATOM(os.path.join(self.base,f"{self.native_PDB}.pdb"))
+		native_pose = pose_from_file(os.path.join(self.base,f"{self.native_PDB}.clean.pdb"))
+		os.remove(os.path.join(self.base,f"{self.native_PDB}.pdb"))
+		os.remove(os.path.join(self.base,f"{self.native_PDB}.clean.pdb"))
+		rmsd = CA_rmsd(native_pose, symm_pose)
+		print(f"RMSD to native structure: {rmsd}")
 
 def main():
 	TELSetta1 = TELSetta()
 	if TELSetta1.TELSAM_version=="1TEL" and TELSetta1.client_pdb!=None:
 		TELSetta1.fuse()
 		if bool(TELSetta1.unit_cell_ab==None and TELSetta1.degree_rotation==None) or TELSetta1.optimize==True:
-			TELSetta1.stepper()
+			TELSetta1.monte_carlo_interface_minimization()
+
 		elif TELSetta1.unit_cell_ab!=None and TELSetta1.degree_rotation!=None and TELSetta1.optimize==False:
 			TELSetta1.picker()
 		else:

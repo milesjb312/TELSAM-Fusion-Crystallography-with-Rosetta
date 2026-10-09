@@ -72,7 +72,7 @@ map<string, string> improbableCodons = {
     {"CCA", "CCG"},{"ACA", "ACC"},
     {"GCT", "GCG"},{"CGA", "CGC"},
     {"CGG", "CGC"},{"AGT", "AGC"},
-    {"AGA", "AGC"},{"AGG", "AGC"},
+    {"AGA", "CGC"},{"AGG", "CGA"},
     {"GGA", "GGC"},{"GGG", "GGC"}
 };
 
