@@ -9,6 +9,7 @@ degree_rotation=""
 remake_TELSAM="false"
 optimize_TELSAM="false"
 exhaustive="false"
+native_PDB=""
 max_parallel_jobs="${TELSETTA_MAX_JOBS:-2}"
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 gene_designer="$script_dir/GeneDesigner2.exe"
@@ -23,7 +24,7 @@ if [ ! -x "$gene_designer" ]; then
     exit 1
 fi
 
-while getopts "pt:c:s:l:u:d:r:oe" flag
+while getopts "pt:c:s:l:u:d:r:oen:" flag
 do
     case "${flag}" in
         p) pymol_setting="false";;
@@ -36,6 +37,7 @@ do
         r) remake_TELSAM="${OPTARG}";;
         o) optimize_TELSAM="true";;
         e) exhaustive="true";;
+        n) native_PDB="${OPTARG}";;
         \?) echo "Invalid option: -$OPTARG" >&2; exit 1;;
     esac
 done
@@ -49,8 +51,15 @@ cmd_base=(
     -s "$client_start_residue" \
     -u "$unit_cell_ab" \
     -d "$degree_rotation" \
-    -r "$remake_TELSAM"
+    -r "$remake_TELSAM" \
+    -n "$native_PDB" \
 )
+if [ "$optimize_TELSAM" = "true" ]; then
+    cmd_base+=(-o)
+fi
+if [ "$exhaustive" = "true" ]; then
+    cmd_base+=(-e)
+fi
 
 #If no linker variant of interest is provided, test all of them in parallel without posting them to PyMOL. Then, with the lowest-energy combinations from
 #each of the fourteen linker variants, run a symmetric refinement and save the pdb.
@@ -60,10 +69,8 @@ if [ "$linker_variant" = "" ]; then
     for linker_variant in {0..16}; do
         (
             echo "Launching $linker_variant/16"
-            cmd=("${cmd_base[@]}" -l "$linker_variant" -o)
-            if [ "$exhaustive" = "true" ]; then
-                cmd=("${cmd_base[@]}" -l "$linker_variant" -o -e)              
-            fi
+            cmd=("${cmd_base[@]}" -l "$linker_variant")
+            echo "Running command: ${cmd[@]}"
             "${cmd[@]}"
             file="$HOME/TELSAM-Fusion-Crystallography-with-Rosetta/${linker_variant}/${linker_variant}_chart.json"
             result=$(jq '
@@ -80,17 +87,6 @@ if [ "$linker_variant" = "" ]; then
             min_e=$(echo "$result" | jq -r '.eoi')
             min_ab=$(echo "$result" | jq -r '.aboi')
             min_d=$(echo "$result" | jq -r '.doi')
-            mcmd=(
-                python ~/TELSAM-Fusion-Crystallography-with-Rosetta/start_TELSetta.py \
-                -t "$TELSAM_version" \
-                -c "$client" \
-                -s "$client_start_residue" \
-                -u "$min_ab" \
-                -d "$min_d" \
-                -r "$remake_TELSAM" \
-                -l "$linker_variant" 
-            )
-            "${mcmd[@]}"
             fasta="$HOME/TELSAM-Fusion-Crystallography-with-Rosetta/${linker_variant}/${TELSAM_version}--${client_name}_${linker_variant}.fasta"
             fastout="$HOME/TELSAM-Fusion-Crystallography-with-Rosetta/${TELSAM_version}--${client_name}_${linker_variant}_gene.fasta"
             echo "fasta:$fasta fastout:$fastout"
@@ -113,16 +109,7 @@ else
     fi
 
     cmd=("${cmd_base[@]}" -l "$linker_variant")
-    if [ "$optimize_TELSAM" = "true" ]; then
-        cmd=("${cmd_base[@]}" -l "$linker_variant" -o)
-        if [ "$exhaustive" = "true" ]; then
-            cmd=("${cmd_base[@]}" -l "$linker_variant" -o -e)
-        fi
-    else
-        if [ "$exhaustive" = "true" ]; then
-            cmd=("${cmd_base[@]}" -l "$linker_variant" -e)
-        fi
-    fi
+    echo "Running command: ${cmd[@]}"
     "${cmd[@]}"
     fasta="$HOME/TELSAM-Fusion-Crystallography-with-Rosetta/${linker_variant}/${TELSAM_version}--${client_name}_${linker_variant}.fasta"
     fastout="$HOME/TELSAM-Fusion-Crystallography-with-Rosetta/${linker_variant}/${TELSAM_version}--${client_name}_${linker_variant}_gene.fasta"

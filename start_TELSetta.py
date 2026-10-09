@@ -24,6 +24,7 @@ from pyrosetta.rosetta.core.id import AtomID
 from pyrosetta.rosetta.core.id import AtomID_Map_AtomID as AtomID_Map
 from pyrosetta.rosetta.core.scoring import superimpose_pose
 from pyrosetta.rosetta.protocols.grafting import delete_region
+from pyrosetta.rosetta.core.scoring import CA_rmsd
 
 #Movemap Factory and Selectors for interface refinement/scoring
 from pyrosetta.rosetta.core.select.movemap import MoveMapFactory, move_map_action
@@ -39,8 +40,7 @@ from pyrosetta.rosetta.core.select.residue_selector import VirtualResidueSelecto
 from pyrosetta.rosetta.core.scoring.dssp import Dssp
 from pyrosetta.rosetta.core.scoring import fa_rep
 from pyrosetta.rosetta.core.scoring import fa_atr
-#from pyrosetta.rosetta.protocols.simple_filters import ShapeComplementarityFilter
-#from pyrosetta.rosetta.core.scoring.sc import ShapeComplementarityCalculator
+from pyrosetta.rosetta.protocols.simple_filters import ShapeComplementarityFilter
 from pyrosetta.rosetta.protocols.analysis import InterfaceAnalyzerMover
 
 from pyrosetta import PyMOLMover
@@ -82,7 +82,8 @@ class TELSetta:
 	Will be deprecated in favor of recreating the 1TEL subunit every time.)\n
 	-o "optimize" (bool indicating whether a precise set of inputs including linker_variant and unit_cell_ab should be further refined.)\n
 	-e "exhaustive" (bool indicating whether all poses should be modeled and scored, or whether Monte Carlo sampling should proceed)\n
-	-s "client_start_residue" (the residue number in the client protein from which to begin fusion)"""
+	-s "client_start_residue" (the residue number in the client protein from which to begin fusion)
+	-n "native_PDB" (PDB id of a native structure to compare to the final solution)"""
 	def __init__(self):
 		self.TELSAM_version = "1TEL"
 		self.client_pdb = None
@@ -104,7 +105,7 @@ class TELSetta:
 			)
 		}
 		try:
-			optlist, args = getopt.getopt(sys.argv[1:], "t:c:l:u:d:r:oe:s:")
+			optlist, args = getopt.getopt(sys.argv[1:], "t:c:l:u:d:r:oe:s:n:")
 			for o, a in optlist:
 				if o == '-t':
 					if a != "1TEL":
@@ -136,6 +137,8 @@ class TELSetta:
 					self.optimize = True
 				elif o == '-e':
 					self.exhaustive = True
+				elif o == '-n':
+					self.native_PDB = a
 				else:
 					print(f'Unhandled argument: {o}')
 					sys.exit(1)
@@ -377,6 +380,7 @@ class TELSetta:
 		self.relax.set_movemap_factory(movemap_factory)
 		self.relax.set_task_factory(tf)
 		self.relax.apply(pose)
+		print(f'SCCalc: {ShapeComplementarityFilter().report_sm(pose)}')
 		try:
 			score = self.bound_separated_interface_energy(pose)
 			self.interfaced = True
@@ -425,15 +429,22 @@ class TELSetta:
 
 	def add_CRYST1(self,new_pdb,old_pdb):
 		"""Copies CRYST1 data from the old_pdb into the new_pdb."""
-		with open (os.path.join(self.base,new_pdb),'r') as file:
-			pdb_sans_cryst = file.read()
-		with open(os.path.join(self.base,new_pdb),'w') as file:
-			with open(os.path.join(self.base,old_pdb)) as s:
-				for line in s:
-					if "CRYST1" in line:
-						file.write(line)
-						break
-			file.write(pdb_sans_cryst)
+		new_path = os.path.join(self.base,new_pdb)
+		old_path = os.path.join(self.base,old_pdb)
+		with open(new_path, 'r') as file:
+			pdb_lines = file.readlines()
+			new_cryst1 = next((line for line in pdb_lines if line.startswith("CRYST1")), None)
+		with open(old_path, 'r') as file:
+			cryst1 = next((line for line in file if line.startswith("CRYST1")), new_cryst1)
+
+		pdb_lines = [line for line in pdb_lines if not line.startswith("CRYST1")]
+		if cryst1 is not None:
+			insert_at = next((i for i, line in enumerate(pdb_lines)
+						  if line.startswith(("ATOM  ", "HETATM", "MODEL "))), len(pdb_lines))
+			pdb_lines.insert(insert_at, cryst1)
+
+		with open(new_path, 'w') as file:
+			file.writelines(pdb_lines)
 		
 	def change_cell(self,read_file,write_file,wa=None,wb=None,wc=None):
 		"""Copies the read_file PDB into a new write_file PDB at the given path, supplying it with an altered CRYST1 line as the user
@@ -546,6 +557,7 @@ class TELSetta:
 		cleanATOM(os.path.join(self.base,"ETEL.pdb"))
 		os.remove(os.path.join(self.base,"ETEL.pdb"))
 
+		
 		#Get 9DOC from the pdb (it has the proper space group that TELSAM usually fits into)
 		url = f"https://files.rcsb.org/download/9DOC.pdb"
 		pdb_text = requests.get(url,headers=self.headers).text
@@ -752,14 +764,15 @@ class TELSetta:
 	###This is where I'm replacing the decision tree with Monte Carlo methodology.
 	def monte_carlo_interface_minimization(self):
 		"""monte_carlo_interface_minimization runs a Monte Carlo algorithm to change the degree of rotation of the pose\
-about the unit cell C-axis and to change the distance between subunits by altering the unit cell AB distance.\
-It does this semi-randomly, with a gaussian step in degree of rotation (centered around 0, st.dev of 10)\
-(many rotations can be tested, and they are tested widely, with little preference for one or another),\
-and a gaussian step in unit cell size (centered around -2.5, st. dev 10) (most attempts are to shrink the unit cell)\n
-Currently, the kT of this Monte Carlo method is set at 3.3. Notably, the method is not foolproof. If the lowest achievable energy is relatively\
-close to higher interfaced energies, you will not be able to isolate it. It is not unusual for the score to dip and rise continuously, unless\
-a clear energy well can be accessed and the gaussian steps and kT are small enough to limit the pose's movement to the inside of that energy well."""
+		about the unit cell C-axis and to change the distance between subunits by altering the unit cell AB distance.\
+		It does this semi-randomly, with a gaussian step in degree of rotation (centered around 0, st.dev of 10)\
+		(many rotations can be tested, and they are tested widely, with little preference for one or another),\
+		and a gaussian step in unit cell size (centered around -2.5, st. dev 10) (most attempts are to shrink the unit cell)\n
+		Currently, the kT of this Monte Carlo method is set at 3.3. Notably, the method is not foolproof. If the lowest achievable energy is relatively\
+		close to higher interfaced energies, you will not be able to isolate it. It is not unusual for the score to dip and rise continuously, unless\
+		a clear energy well can be accessed and the gaussian steps and kT are small enough to limit the pose's movement to the inside of that energy well."""
 		ucab = self.get_CRYST1(self.linker_pdb)[0]
+		symm_pose = None
 		for u_sample in range(15):
 			test_ucab = round(ucab + random.gauss(-5,5),3)
 			ucab_pdb = os.path.join(self.base,f'{self.TELSAM_version}--{self.client_pdb}_{self.linker_variant}_{test_ucab}.pdb')
@@ -794,6 +807,7 @@ a clear energy well can be accessed and the gaussian steps and kT are small enou
 						d_sample = d_sample-1
 						continue
 					symm_pose.dump_pdb(os.path.join(self.base,f'{self.TELSAM_version}--{self.client_pdb}_{self.linker_variant}_{test_ucab}_{test_deg}_symmetric.pdb'))
+					self.compare_native(symm_pose=symm_pose)
 					if self.interfaced:
 						self.pmm.apply(symm_pose)
 						self.pmm.send_energy(symm_pose)
@@ -819,7 +833,21 @@ a clear energy well can be accessed and the gaussian steps and kT are small enou
 						d_sample = d_sample-1
 			else:
 				u_sample = u_sample-1
+		return symm_pose
 		#self.chart(self.linker_variant)
+
+	def exhaustive_search(self):
+		ucab = self.get_CRYST1(self.linker_pdb)[0]
+		symm_pose = None
+		for ucab in range(self.furthest_x*2,self.furthest_x*2-30,-1):
+			ucab_pdb = os.path.join(self.base,f'{self.TELSAM_version}--{self.client_pdb}_{self.linker_variant}_{ucab}.pdb')
+			self.change_cell(self.linker_pdb,ucab_pdb,wa=ucab,wb=ucab)
+			symm_pose = pose_from_pdb(ucab_pdb)
+			makesym = SetupForSymmetryMover("CRYST1")
+			makesym.apply(symm_pose)
+			self.add_coordinate_constraints(symm_pose)
+			starting_energy = self.interface_refine(symm_pose)#this has to come before self.interfaced, because it changes self.interfaced based on whether the interface scoring works.
+
 
 	def picker(self):
 		ucab_pdb = os.path.join(self.base,f'{self.TELSAM_version}--{self.client_pdb}_{self.linker_variant}_{str(int(float(self.unit_cell_ab)))}.pdb')
@@ -837,12 +865,29 @@ a clear energy well can be accessed and the gaussian steps and kT are small enou
 		self.pmm.send_energy(symm_pose)
 		self.chart(self.linker_variant)
 
+	def compare_native(self, symm_pose):
+		if self.native_PDB is None:
+			print("No native PDB provided for comparison.")
+			return
+
+		url = f"https://files.rcsb.org/download/{self.native_PDB}.pdb"
+		pdb_text = requests.get(url,headers=self.headers).text
+		with open(os.path.join(self.base,f"{self.native_PDB}.pdb"),"w") as file:
+			file.write(pdb_text)
+		cleanATOM(os.path.join(self.base,f"{self.native_PDB}.pdb"))
+		native_pose = pose_from_file(os.path.join(self.base,f"{self.native_PDB}.clean.pdb"))
+		os.remove(os.path.join(self.base,f"{self.native_PDB}.pdb"))
+		os.remove(os.path.join(self.base,f"{self.native_PDB}.clean.pdb"))
+		rmsd = CA_rmsd(native_pose, symm_pose)
+		print(f"RMSD to native structure: {rmsd}")
+
 def main():
 	TELSetta1 = TELSetta()
 	if TELSetta1.TELSAM_version=="1TEL" and TELSetta1.client_pdb!=None:
 		TELSetta1.fuse()
 		if bool(TELSetta1.unit_cell_ab==None and TELSetta1.degree_rotation==None) or TELSetta1.optimize==True:
 			TELSetta1.monte_carlo_interface_minimization()
+
 		elif TELSetta1.unit_cell_ab!=None and TELSetta1.degree_rotation!=None and TELSetta1.optimize==False:
 			TELSetta1.picker()
 		else:
